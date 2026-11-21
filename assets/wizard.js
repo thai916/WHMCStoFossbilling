@@ -6,6 +6,16 @@
     const $ = id => document.getElementById(`wm-${id}`);
     let source = null, profile = null, defaultProfile = null, run = null, pumping = false;
     const counts = new Map();
+    function batchRequestId() {
+        const webcrypto = globalThis.crypto;
+        if (typeof webcrypto?.randomUUID === "function") return webcrypto.randomUUID().replace(/-/g, "");
+        const bytes = new Uint8Array(16);
+        if (typeof webcrypto?.getRandomValues === "function") webcrypto.getRandomValues(bytes);
+        else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+    }
     const element = (tag, text, className = "") => {
         const node = document.createElement(tag);
         if (text !== undefined && text !== null) node.textContent = String(text);
@@ -346,7 +356,7 @@
         run = await api("run_control", { run_id: run.id, action: "resume" });
         pumping = true; renderRun();
         while (pumping && run.status === "running") {
-            const result = await api("run_batch", { run_id: run.id, request_id: crypto.randomUUID().replaceAll("-", ""), limit: 50 });
+            const result = await api("run_batch", { run_id: run.id, request_id: batchRequestId(), limit: 50 });
             await refreshRun();
             if (result.status !== "running") break;
             await new Promise(resolve => setTimeout(resolve, 200));

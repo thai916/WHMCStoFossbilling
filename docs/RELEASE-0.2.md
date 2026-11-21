@@ -39,6 +39,13 @@ Direction: **WHMCS 8.x → FOSSBilling 0.8.9**.
   profile cannot silently weaken an existing run.
 - Successful connection messages render in dark green.
 
+## Batch scheduling
+
+- Resume no longer depends on `crypto.randomUUID`, which is unavailable on
+  non-secure local origins such as `http://fossbill.test`. A Web Crypto fallback
+  keeps the 32-character lowercase hex idempotency key that prevents duplicate
+  batch processing.
+
 ## Upgrade / important limits
 
 Replace the `modules/Whmcsmigrator/` directory with this release's directory.

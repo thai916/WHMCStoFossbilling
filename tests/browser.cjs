@@ -51,6 +51,7 @@ const historicalRun = {
 };
 const requests = [];
 const testedModes = [];
+const batchRequestIds = [];
 const server = http.createServer((request, response) => {
     const item = content[request.url];
     if (!item) { response.writeHead(404); response.end(); return; }
@@ -109,7 +110,10 @@ const server = http.createServer((request, response) => {
                     currentRun = { id: "a".repeat(32), mode: data.mode, status: "paused", last_batch_at: null, categories: [{ table_name: "tblclients", expected: 1, processed: 0, imported: 0, archived: 0, skipped: 0, failed: 0 }], errors: [], reconciliation: { reason: "Not performed" } };
                     result = currentRun; break;
                 case "run_control": currentRun.status = data.action === "resume" ? "running" : "paused"; result = currentRun; break;
-                case "run_batch": currentRun.status = "preview_finished"; currentRun.categories[0].processed = 1; currentRun.categories[0].archived = 1; result = { status: currentRun.status }; break;
+                case "run_batch":
+                    assert.match(data.request_id, /^[a-f0-9]{32}$/, "Batch idempotency key stays 32 lowercase hex characters without randomUUID");
+                    batchRequestIds.push(data.request_id);
+                    currentRun.status = "preview_finished"; currentRun.categories[0].processed = 1; currentRun.categories[0].archived = 1; result = { status: currentRun.status }; break;
                 case "run_status": result = data.run_id === historicalRunId ? historicalRun : currentRun; break;
                 case "archive_search":
                     assert.equal(data.legacy_kind, "invoice");
@@ -122,6 +126,8 @@ const server = http.createServer((request, response) => {
         await page.addInitScript(() => {
             // Test clipboard wiring without changing the user's real clipboard.
             Object.defineProperty(navigator, "clipboard", { value: { writeText: async text => { window.TEST_COPIED_IP = text; } } });
+            // Reproduce non-secure origins such as http://fossbill.test where randomUUID is unavailable.
+            if (globalThis.Crypto?.prototype) Object.defineProperty(Crypto.prototype, "randomUUID", { value: undefined, configurable: true });
         });
         await page.goto(`http://127.0.0.1:${port}/`);
         await page.waitForLoadState("networkidle");
@@ -191,6 +197,8 @@ const server = http.createServer((request, response) => {
         assert.equal(requests.includes("run_batch"), false, "Preview creation cannot start scheduling before explicit Resume");
         await page.locator("#wm-resume").click();
         await page.waitForFunction(() => document.getElementById("wm-run-summary").textContent.includes("preview_finished"));
+        assert.ok(batchRequestIds.length >= 1, "Resume schedules at least one batch when randomUUID is unavailable");
+        assert.equal(new Set(batchRequestIds).size, batchRequestIds.length, "Fallback batch ids remain unique");
         await page.locator('[data-step="archive"]').click();
         await page.locator('[name="legacy_reference"]').fill("LEGACY-001");
         await page.locator("#wm-archive-search button").click();
@@ -212,7 +220,7 @@ const server = http.createServer((request, response) => {
         await page.screenshot({ path: path.join(artifacts, "mobile.png"), fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile connection page has no horizontal overflow");
         assert.deepEqual(errors, [], "No browser JavaScript errors");
-        console.log("PASS: synthetic browser wizard, standard no-TLS default plus all explicitly selected security modes, risk confirmations, conditional CA fields, explicit WHMCS timezone dropdown with America/Chicago default, dark-green success text, connection diagnostics, explicit public-IP controls, schema upgrade, historical preview/resume, legacy search, financial displays, XSS protection, no browser storage, desktop/mobile layout");
+        console.log("PASS: synthetic browser wizard, standard no-TLS default plus all explicitly selected security modes, risk confirmations, conditional CA fields, explicit WHMCS timezone dropdown with America/Chicago default, dark-green success text, connection diagnostics, explicit public-IP controls, schema upgrade, historical preview/resume with missing-randomUUID fallback, legacy search, financial displays, XSS protection, no browser storage, desktop/mobile layout");
         const livePage = await browser.newPage();
         await livePage.goto("http://fossbill.test/admin/whmcsmigrator");
         await livePage.waitForLoadState("networkidle");
