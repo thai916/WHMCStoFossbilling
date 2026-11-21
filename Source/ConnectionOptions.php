@@ -41,7 +41,7 @@ final class ConnectionOptions
         if ($timeout === false) {
             throw new SafeException('Connection timeout must be between 1 and 10 seconds.');
         }
-        $mode = (string) ($input['security_mode'] ?? (!array_key_exists('tls', $input) || !empty($input['tls']) ? 'verified_tls' : 'standard'));
+        $mode = (string) ($input['security_mode'] ?? (array_key_exists('tls', $input) ? (!empty($input['tls']) ? 'verified_tls' : 'standard') : 'standard'));
         if (!in_array($mode, ['verified_tls', 'unverified_tls', 'standard'], true)) throw new SafeException('Unknown source connection security mode.');
         $legacyLocal = $legacyStoredProfile && !array_key_exists('security_mode', $input) && array_key_exists('tls', $input)
             && empty($input['tls']) && in_array(strtolower($host), ['localhost', '127.0.0.1', '::1'], true);

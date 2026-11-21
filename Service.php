@@ -108,11 +108,9 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         if ($version === null && ($input['confirm_whmcs8'] ?? '') !== 'WHMCS 8.x') {
             throw new SafeException('Source version could not be detected. Verify WHMCS 8.x manually and provide the explicit version confirmation.');
         }
-        $options['timezone_detection'] = $reader->timezone($schema);
-        if (($options['source_timezone'] ?? '') !== '') {
-            $options['timezone_detection'] = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::override($options['timezone_detection'], $options['source_timezone']);
-        }
-        $options['source_timezone'] = $options['timezone_detection']['timezone'] ?? '';
+        $options['timezone_detection'] = ($options['source_timezone'] ?? '') !== ''
+            ? \Box\Mod\Whmcsmigrator\Source\SourceTimezone::selected($options['source_timezone'])
+            : \Box\Mod\Whmcsmigrator\Source\SourceTimezone::unselected();
         $options['connection_status'] = $reader->connectionStatus() + [
             'table_availability' => ['available' => true, 'tables_found' => count($schema), 'required_tables' => ['clients', 'products', 'hosting', 'invoices', 'invoiceitems', 'accounts']],
         ];
@@ -165,8 +163,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         try {
             $row = $store->source($source);
             $options = $this->vault()->open($row['credentials']);
-            if (!isset($options['timezone_detection'])) throw new SafeException('Retest this saved source to collect automatic timezone evidence before confirming an override.');
-            $options['timezone_detection'] = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::override($options['timezone_detection'], $timezone);
+            $options['timezone_detection'] = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::selected($timezone);
             $options['source_timezone'] = $timezone;
             $store->execute('UPDATE whmcsmigrator_source SET credentials=? WHERE id=?', [$this->vault()->seal($options), $source]);
 
@@ -245,7 +242,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
                 $clientTimestamp = $suffix === 'clients' && preg_match('/\\A(?:datetime|timestamp)\\b/i', $schema[$name]['columns']['datecreated']['type'] ?? '');
                 if ($clientTimestamp || in_array($suffix, ['tickets', 'ticketreplies', 'ticketnotes', 'emails'], true)
                     || ($target === 'historical_native' && in_array($suffix, ['accounts', 'credit', 'invoices', 'hosting'], true))) {
-                    throw new SafeException('WHMCS application timezone is Unverified. Review automatic evidence and confirm an exact application timezone before authorizing timezone-sensitive native records. Archive mode remains available.');
+                    throw new SafeException('WHMCS application timezone is Unverified. Select and confirm the exact WHMCS application timezone before authorizing timezone-sensitive native records. Archive mode remains available.');
                 }
             }
         }

@@ -15,6 +15,7 @@
 #whmcsmigrator details>summary{cursor:pointer;font-weight:600;padding:.5rem 0}
 #whmcsmigrator pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:36rem;overflow:auto}
 #whmcsmigrator :focus-visible{outline:2px solid #206bc4;outline-offset:3px}
+#whmcsmigrator .wm-success{color:#0b5d2a!important;font-weight:700}
 #whmcsmigrator #wm-connection .row{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:1rem;margin:0}
 #whmcsmigrator #wm-connection .row>*{width:100%;margin:0;padding:0;grid-column:span 12}
 #whmcsmigrator #wm-connection .row>.col-md-3{grid-column:span 3}

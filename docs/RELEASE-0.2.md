@@ -1,4 +1,4 @@
-# 0.2 — Connection bug fixes and timezone diagnostics
+# 0.2 — Connection bug fixes, privilege validation and timezone selection
 
 **Experimental prerelease — not a production-complete migration tool.**
 
@@ -7,8 +7,13 @@ Direction: **WHMCS 8.x → FOSSBilling 0.8.9**.
 
 ## Connection bug fixes
 
-- Three source-only modes: verified TLS (default), explicitly acknowledged
-  unverified TLS, and explicitly acknowledged standard MySQL without TLS.
+- Three source-only modes: explicitly acknowledged standard MySQL without TLS
+  (default), verified TLS, and explicitly acknowledged unverified TLS.
+- cPanel database-wide SELECT grants with escaped identifiers, quoted names and
+  host-specific accounts are recognized. Grant inspection prefers
+  `SHOW GRANTS FOR CURRENT_USER()` and reports sanitized privilege scopes without
+  weakening write/delegation restrictions. Inconclusive inspection is reported
+  distinctly from missing privileges.
 - Certificate fields are optional overrides in verified mode and hidden in other
   modes. Standard MySQL does not require a CA or TLS-specific hostname.
 - No automatic downgrade. TLS preflight distinguishes certificate validation from
@@ -18,19 +23,21 @@ Direction: **WHMCS 8.x → FOSSBilling 0.8.9**.
 - SELECT-only grants, read-only transactions, secret exclusion, encrypted
   credential storage and per-endpoint permission/CSRF protection are retained.
 
-## Timezone evidence
+## WHMCS server timezone
 
-- Automatic bounded configuration-candidate inspection and MySQL session/server
-  timezone/UTC-offset SELECTs, with method/confidence displayed.
-- No assumption that database timezone equals WHMCS/PHP timezone; no offset-to-IANA
-  guessing or implicit UTC default.
-- Optional administrator-verified IANA override only when automatic evidence is
-  inconclusive. Remote PHP runtime/history cannot be proved through database access.
+- A required administrator-facing IANA dropdown replaces automatic timezone
+  inspection. It defaults to **America/Chicago** and is saved with the connection
+  profile.
+- No MySQL session/server timezone, UTC-offset or application-setting candidate is
+  queried; no offset-to-IANA guessing or implicit UTC/FOSSBilling default.
+- An empty selection remains Unverified and blocks timezone-sensitive native runs.
+  Remote PHP runtime/history cannot be proved through database access.
 - Native timestamp-sensitive runs block while unresolved; date-only fields are
-  unchanged. Client DATETIME registrations now use the same verified timezone/DST
-  rules as other historical event adapters.
-- Run plans snapshot security mode and timezone evidence. Changing the source
+  unchanged. Client DATETIME registrations use the same selected timezone/DST rules
+  as other historical event adapters.
+- Run plans snapshot security mode and the selected timezone. Changing the source
   profile cannot silently weaken an existing run.
+- Successful connection messages render in dark green.
 
 ## Upgrade / important limits
 

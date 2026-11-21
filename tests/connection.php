@@ -40,12 +40,13 @@ $stop = static function () use (&$process, &$admin, &$reader): void {
         $process = null;
     }
 };
-$start = static function (bool $tls) use ($mysqld, $directory, $basedir, $port, &$process, &$admin): void {
+$start = static function (bool $tls, bool $partialRevokes = false) use ($mysqld, $directory, $basedir, $port, &$process, &$admin): void {
     $args = [$mysqld, '--no-defaults', '--basedir=' . $basedir, '--datadir=' . $directory . '/data',
         '--tmpdir=' . $directory . '/tmp', '--port=' . $port, '--bind-address=127.0.0.1,::1',
         '--mysqlx=OFF', '--skip-log-bin', '--max-connections=12', '--innodb-buffer-pool-size=32M',
         '--innodb-redo-log-capacity=32M', '--log-error=' . $directory . '/server.log',
         '--general-log=ON', '--general-log-file=' . $directory . '/queries.log'];
+    if ($partialRevokes) $args[] = '--partial-revokes=ON';
     if ($tls) {
         array_push($args, '--ssl-ca=' . $directory . '/ca.pem', '--ssl-cert=' . $directory . '/server.pem', '--ssl-key=' . $directory . '/server-key.pem');
     } else {
@@ -93,7 +94,9 @@ try {
     $admin->exec('CREATE TABLE wm_connection_fixture.tblconfiguration (id INT PRIMARY KEY,setting VARCHAR(100),value TEXT)');
     $admin->exec("INSERT INTO wm_connection_fixture.tblconfiguration VALUES (1,'Version','8.10.1'),(2,'Timezone','Asia/Kolkata'),(3,'Secret','DO_NOT_EXTRACT')");
     $admin->exec("CREATE USER 'wm_reader'@'localhost' IDENTIFIED BY '$password'");
-    $admin->exec("GRANT SELECT ON wm_connection_fixture.* TO 'wm_reader'@'localhost'");
+    $admin->exec("GRANT SELECT ON `wm\\_connection\\_fixture`.* TO 'wm_reader'@'localhost'");
+    $admin->exec("CREATE USER 'wm_host_reader'@'127.0.0.1' IDENTIFIED BY '$password'");
+    $admin->exec("GRANT SELECT ON `wm\\_connection\\_fixture`.* TO 'wm_host_reader'@'127.0.0.1'");
     $admin->exec("CREATE USER 'wm_writer'@'localhost' IDENTIFIED BY '$password'");
     $admin->exec("GRANT SELECT,INSERT ON wm_connection_fixture.* TO 'wm_writer'@'localhost'");
     $admin->exec("CREATE USER 'wm_noselect'@'localhost' IDENTIFIED BY '$password'");
@@ -102,10 +105,15 @@ try {
     $plain = $base + ['security_mode' => 'standard', 'tls_ca' => 'D:/not-required.pem'];
     $reader = new Reader($plain);
     expect($reader->connectionStatus()['tls_active'] === false && !$reader->connectionStatus()['server_identity_verified'], 'Actual standard PDO connection needs no CA, negotiates no TLS and never claims identity verification');
+    $privileges = $reader->connectionStatus()['privileges'];
+    expect($privileges['scope'] === 'database-wide SELECT' && in_array('escaped database identifier', $privileges['matched_by'], true), 'Actual MySQL SHOW GRANTS accepts cPanel-style escaped underscores without global privileges');
+    expect($privileges['inspection_method'] === 'SHOW GRANTS FOR CURRENT_USER()' && !str_contains(json_encode($privileges), 'wm_reader'), 'Actual privilege summary reports scope but does not disclose account/authentication text');
+    $hostReader = new Reader(array_replace($plain, ['username' => 'wm_host_reader']));
+    expect($hostReader->connectionStatus()['privileges']['status'] === 'verified', 'Actual host-specific MySQL account receives the same safe scope validation');
+    unset($hostReader);
     $reader = new Reader($base + ['security_mode' => 'verified_tls', 'tls_ca' => $directory . '/ca.pem']);
     expect($reader->connectionStatus()['tls_active'] && $reader->connectionStatus()['server_identity_verified'], 'Verified TLS succeeds against a disposable server with a valid private CA/IP SAN');
-    $timezone = $reader->timezone(['tblconfiguration' => ['columns' => ['setting' => [], 'value' => []]]]);
-    expect($timezone['detected_timezone'] === 'Asia/Kolkata' && $timezone['status'] === 'unverified' && !str_contains(json_encode($timezone), 'DO_NOT_EXTRACT'), 'Actual source timezone SELECT detects an exact candidate, returns offset evidence and never reads unrelated secret settings');
+    expect(!str_contains(json_encode($reader->connectionStatus()), 'DO_NOT_EXTRACT'), 'Connection diagnostics never expose unrelated WHMCS configuration values; no timezone inspection is performed');
     $reader = new Reader($base + ['security_mode' => 'unverified_tls', 'tls_ca' => 'D:/not-required.pem']);
     expect($reader->connectionStatus()['tls_active'] && !$reader->connectionStatus()['server_identity_verified'], 'Unverified TLS really encrypts despite a private CA not in the default trust store');
     $fails(fn () => new Reader($base + ['security_mode' => 'verified_tls', 'tls_ca' => dirname(__DIR__) . '/certificates/cacert.pem']), 'TLS certificate validation failed', 'Untrusted verified TLS fails without downgrading to unverified TLS or plaintext');
@@ -114,25 +122,29 @@ try {
     $fails(fn () => new Reader(array_replace($plain, ['username' => 'wm_writer'])), 'SELECT', 'A source account with write privileges is refused even in standard mode');
     $fails(fn () => new Reader(array_replace($plain, ['username' => 'wm_noselect'])), 'SELECT permissions', 'Missing database SELECT access has a distinct sanitized diagnostic');
     $fails(fn () => ConnectionFactory::connect(ConnectionOptions::validate(array_replace($plain, ['username' => 'root', 'password' => '', 'database' => 'wm_missing_fixture']))), 'database was not found', 'Missing database has a distinct sanitized diagnostic');
-    expect($admin->query('SELECT * FROM wm_connection_fixture.tblconfiguration ORDER BY id')->fetchAll(PDO::FETCH_ASSOC) === $before, 'All successful/failed connection and timezone checks leave synthetic source data unchanged');
+    expect($admin->query('SELECT * FROM wm_connection_fixture.tblconfiguration ORDER BY id')->fetchAll(PDO::FETCH_ASSOC) === $before, 'All successful/failed connection checks leave synthetic source data unchanged');
+    $stop();
+    $start(false, true);
+    foreach (['verified_tls', 'unverified_tls'] as $mode) {
+        $fails(fn () => new Reader($base + ['security_mode' => $mode, 'tls_ca' => $directory . '/ca.pem']), 'does not advertise TLS', $mode . ' refuses a TLS-disabled server before sending credentials, without silent downgrade');
+    }
+    $fails(fn () => new Reader($plain), 'SELECT permissions', 'Actual partial_revokes enabled treats pre-existing escaped schema grant names literally, not as wildcard escapes');
+    $admin->exec("GRANT SELECT ON `wm_connection_fixture`.* TO 'wm_reader'@'localhost'");
+    $reader = new Reader($plain);
+    expect($reader->connectionStatus()['tls_active'] === false, 'Explicit standard mode still works when the disposable server has TLS disabled');
+    expect(in_array('literal database identifier', $reader->connectionStatus()['privileges']['matched_by'], true), 'Actual literal database SELECT is recognized with partial_revokes enabled without reinterpreting old escapes');
     $stop();
     $sourceConnections = [];
     $sourceQueries = [];
     foreach (file($directory . '/queries.log', FILE_IGNORE_NEW_LINES) as $line) {
         if (!preg_match('/\\A\\s*(?:\\d{4}-\\S+\\s+)?(\\d+)\\s+(Connect|Query|Prepare|Execute|Quit|Close stmt)\\s*(.*)\\z/', $line, $parts)) continue;
         [, $id, $command, $sql] = $parts;
-        if ($command === 'Connect' && str_contains($sql, 'wm_reader@')) $sourceConnections[$id] = true;
-        if (!isset($sourceConnections[$id]) || !in_array($command, ['Query', 'Prepare', 'Execute'], true)) continue;
+        if ($command === 'Connect') $sourceConnections[$id] = (bool) preg_match('/\\bwm_(?:reader|host_reader|writer|noselect)@/', $sql);
+        if (empty($sourceConnections[$id]) || !in_array($command, ['Query', 'Prepare', 'Execute'], true)) continue;
         $sourceQueries[] = $sql;
         if (!preg_match('/\\A(?:SELECT\\b|SHOW\\b|START TRANSACTION READ ONLY\\z|ROLLBACK\\z)/i', $sql)) throw new RuntimeException('Source-query audit found a non-read-only statement. No raw SQL was disclosed.');
     }
     expect(count($sourceQueries) >= 10 && str_contains(implode("\n", $sourceQueries), 'START TRANSACTION READ ONLY'), 'Actual MySQL query log proves the source reader only issued SELECT/SHOW safety metadata, READ ONLY transaction start and rollback; no modifying statements or SET');
-    $start(false);
-    foreach (['verified_tls', 'unverified_tls'] as $mode) {
-        $fails(fn () => new Reader($base + ['security_mode' => $mode, 'tls_ca' => $directory . '/ca.pem']), 'does not advertise TLS', $mode . ' refuses a TLS-disabled server before sending credentials, without silent downgrade');
-    }
-    $reader = new Reader($plain);
-    expect($reader->connectionStatus()['tls_active'] === false, 'Explicit standard mode still works when the disposable server has TLS disabled');
     echo "Disposable connection suite finished. No live WHMCS or installed MySQL settings were used.\n";
 } finally {
     $stop();

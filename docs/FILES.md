@@ -59,6 +59,7 @@ tests/bootstrap.php
 tests/browser.cjs
 tests/integration.php
 tests/connection.php
+tests/grants.php
 tests/integrity.php
 tests/render.php
 tests/security.php

@@ -43,7 +43,7 @@ Native client credits are real funds once committed. The extension checks for ac
 
 Event timestamps require the confirmed WHMCS IANA timezone. Calendar dates are preserved without shifting the business date. Native event adapters require a UTC destination and refuse ambiguous/nonexistent daylight-saving times; no global timezone change is made.
 
-Test connection automatically inspects bounded application-timezone candidates and MySQL timezone/offset metadata, showing method/confidence. It does not assume UTC, the FOSSBilling timezone or equality between MySQL and WHMCS/PHP timezones. When database-only evidence cannot prove the application setting, it remains Unverified and native timestamp-sensitive authorizations are blocked. An optional confirmed IANA override then becomes available without another password submission. Existing runs retain their snapshots. WHMCS version defaults to auto-detection; the verified 8.x fallback never overrides a detected incompatible version.
+Test connection submits the administrator's selected WHMCS server timezone from a required IANA dropdown, defaulting to America/Chicago. No application setting or MySQL timezone/offset is inspected. An empty selection remains Unverified and blocks native timestamp-sensitive authorizations; no UTC, FOSSBilling timezone or offset-derived zone is substituted. Saved profiles can be retested and the dropdown changed without resubmitting a password, but existing runs retain their snapshots. WHMCS version defaults to auto-detection; the verified 8.x fallback never overrides a detected incompatible version.
 
 ## Interrupted requests
 

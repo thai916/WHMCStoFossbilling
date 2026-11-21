@@ -16,10 +16,10 @@ This extension is **vibe coded**. It requires independent security review and di
 - Admin navigation, four-step wizard and per-endpoint permissions.
 - Session-bound POST/CSRF checks, including when global CSRF protection is off.
 - Separate source PDO connection: direct database-scoped SELECT-only grants, explicit read-only transactions, no source write interface.
-- Three source-only security modes: verified TLS (default), explicitly acknowledged unverified TLS, or explicitly acknowledged standard MySQL without TLS. Secure failures never downgrade.
+- Three source-only security modes: standard MySQL without TLS (default, explicitly acknowledged), verified TLS, or explicitly acknowledged unverified TLS. Secure failures never downgrade.
 - Readable default CA selection with an included Mozilla trust bundle, safe connection diagnostics and actual encryption/identity/table-availability reporting.
 - Explicit administrator-requested server-side public IPv4 lookup and copy/refresh controls. No automatic public-IP requests.
-- Automatic read-only timezone evidence inspection, confidence/method display and an optional verified application-timezone override when detection is inconclusive. No UTC or offset-to-IANA guessing.
+- Administrator-selected WHMCS server timezone dropdown with an America/Chicago default. No automatic timezone inspection, UTC assumption or offset-to-IANA guessing.
 - WHMCS version/schema inspection, conservative sensitive-table/column exclusion.
 - Per-table preflight counts in separate requests.
 - Editable client text-field mappings, archive/skip dispositions, mapping validation and JSON profiles.
@@ -49,7 +49,7 @@ This extension is **vibe coded**. It requires independent security review and di
 
 When upgrading the initial preview, use **Upgrade extension tables only** if prompted. It requires explicit confirmation and configure/execute permission. It creates only missing `whmcsmigrator_*` tables; no core schema or business records are altered. Previously authorized native runs cannot silently acquire new adapters: cancel an old unfinished native run and create a newly reviewed plan.
 
-Upgrading 0.1 to 0.2 adds no tables. Retest saved connections to collect security/timezone diagnostics. New run plans freeze the selected security mode; changing it requires a new reviewed run rather than silently changing an old authorization.
+Upgrading 0.1 to 0.2 adds no tables. Retest saved connections to collect security diagnostics and confirm the WHMCS server timezone in the dropdown. New run plans freeze the selected security mode and timezone; changing either requires a newly reviewed run rather than silently changing an old authorization.
 
 For this development installation:
 
@@ -67,9 +67,9 @@ Apache direct requests to the module directory are denied by its own `.htaccess`
 
 1. Have your DBA create a dedicated account with **SELECT on the WHMCS database only**. Do not provide a root or normal WHMCS application account.
 2. Allowlist the destination's actual public outbound/NAT IP on the database firewall. **Show public IP** performs an explicit HTTPS request from the FOSSBilling server to `api.ipify.org`; no database credentials/customer data are sent. **Copy IP** and **Refresh public IP** are available after lookup. PHP cURL is required for this optional feature. Verify MySQL uses the same outbound route, especially with VPNs/proxies.
-3. Choose **Connection security**. Keep **Verified TLS (Recommended)** where possible; provide a provider CA override only if needed. **TLS Without Certificate Verification (Advanced)** requires explicit risk acknowledgement and actual encryption but cannot authenticate the server. **Standard MySQL Connection (No TLS)** requires explicit risk acknowledgement; no CA or TLS-specific hostname is required, and credentials/customer data may travel unencrypted. There is no automatic fallback. See [connection modes, diagnostics and HostGator instructions](docs/CONNECTIONS.md) and [CA provenance](certificates/README.md).
+3. Choose **Connection security**. **Standard MySQL Connection (No TLS)** is the default and requires explicit risk acknowledgement; no CA or TLS-specific hostname is required, and credentials/customer data may travel unencrypted. **Verified TLS** uses a readable CA bundle (provider override if needed). **TLS Without Certificate Verification (Advanced)** requires explicit risk acknowledgement and actual encryption but cannot authenticate the server. There is no automatic fallback. See [connection modes, diagnostics and HostGator instructions](docs/CONNECTIONS.md) and [CA provenance](certificates/README.md).
 4. Test connection, then review every discovered table and field.
-5. Review the automatic timezone evidence after testing. MySQL timezone/offset and an application-setting candidate are not proof of the remote PHP runtime. When inconclusive, verify the actual WHMCS application timezone and save the optional override without resending the password. Otherwise remain Unverified and use archive mode for event history. Version defaults to **Auto-detect**; a manually verified 8.x fallback never overrides an incompatible detected version. Native event adapters currently require a UTC-configured destination; the extension never changes global timezone settings.
+5. Select the **WHMCS server timezone** in the dropdown before testing. It defaults to **America/Chicago**; confirm it matches the WHMCS/PHP application timezone, including any historical timezone changes. No MySQL timezone or offset is inspected or inferred. Selecting an empty value leaves the source Unverified and blocks timezone-sensitive native records; use archive mode for event history. Version defaults to **Auto-detect**; a manually verified 8.x fallback never overrides an incompatible detected version. Native event adapters currently require a UTC-configured destination; the extension never changes global timezone settings.
 6. Save mappings, analyze selected tables, choose the intended execution mode and create its dry run.
 7. Explicitly resume the paused preview. Review all exceptions.
 8. If the supported scope is appropriate, authorize the run with a verified backup and `PRESERVE HISTORY`. Historical financial mode additionally requires confirmation that the destination is private and otherwise idle.
@@ -93,7 +93,7 @@ Do not connect this preview to real customer data until it has been reviewed. Pr
 - Row deletions and count mismatches require manual review. Updates to a source row behind a completed cursor require a new run.
 - Direct schema-wide SELECT grants are required. Role-based/table-only/column-only grants and global SELECT are refused conservatively.
 - Read-only database grants do not protect confidentiality on the network: unverified TLS can be impersonated, and standard MySQL can expose credentials/customer data in transit. Prefer verified TLS or an independently secured tunnel.
-- Database-only timezone inspection cannot prove PHP/configuration.php/hooks or historical timezone changes. Unverified evidence blocks timezone-sensitive native authorizations; date-only fields stay unchanged. Existing imported timestamps are never silently rewritten.
+- The selected WHMCS server timezone is administrator-provided profile metadata, not proof of PHP/configuration.php/hooks or historical timezone changes. An empty selection blocks timezone-sensitive native authorizations; date-only fields stay unchanged. Existing imported timestamps are never silently rewritten.
 - MySQL reads request a five-second execution limit. MariaDB-specific execution deadlines and actual network-disconnect behavior are **not verified**; PHP's PDO connection timeout is not a universal query/read deadline.
 - Value pages are byte-budgeted before fetching bodies. Oversized fields/rows are rejected in the SELECT and cannot become null archive substitutes. InnoDB/repeatable-read uses stable length/value probes; READ COMMITTED or non-snapshot engines use one bounded row/page. Other isolation levels are refused, not changed.
 - Destination strict SQL mode is required and checked, never enabled by this extension.

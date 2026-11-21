@@ -15,7 +15,7 @@ use Box\Mod\Whmcsmigrator\Source\ConnectionOptions;
 use Box\Mod\Whmcsmigrator\Source\GrantPolicy;
 use Box\Mod\Whmcsmigrator\Source\Reader;
 
-$options = ['host' => '127.0.0.1', 'database' => 'whmcs_test', 'username' => 'reader', 'password' => 'test-only'];
+$options = ['host' => '127.0.0.1', 'database' => 'whmcs_test', 'username' => 'reader', 'password' => 'test-only', 'security_acknowledged' => true];
 expect(ConnectionOptions::validate($options)['port'] === 3306, 'Port defaults to 3306');
 expect(ConnectionOptions::validate($options + ['prefix' => 'custom_'])['prefix'] === 'custom_', 'Custom identifier prefix accepted');
 rejects(fn () => ConnectionOptions::validate(array_replace($options, ['host' => 'https://example.com'])), 'HTTP URLs rejected');
@@ -23,12 +23,12 @@ rejects(fn () => ConnectionOptions::validate(array_replace($options, ['host' => 
 rejects(fn () => ConnectionOptions::validate($options + ['prefix' => 'tbl;DROP'] ), 'Identifier injection rejected');
 rejects(fn () => ConnectionOptions::validate($options + ['port' => 0]), 'Invalid port rejected');
 rejects(fn () => ConnectionOptions::validate($options + ['timeout' => 60]), 'Unbounded connection timeout rejected');
-expect(ConnectionOptions::validate(array_replace($options, ['host' => 'db.example.com']))['security_mode'] === 'verified_tls', 'Verified TLS is the default even when no security field is supplied');
-rejects(fn () => ConnectionOptions::validate($options + ['security_mode' => 'standard']), 'Standard mode requires explicit administrator risk acknowledgement');
-rejects(fn () => ConnectionOptions::validate($options + ['tls' => false]), 'Legacy tls=false form/API input cannot bypass explicit acknowledgement, even on loopback');
+expect(ConnectionOptions::validate(array_replace($options, ['host' => 'db.example.com']))['security_mode'] === 'standard', 'Standard MySQL connection is the default when no security field is supplied');
+rejects(fn () => ConnectionOptions::validate(array_replace($options, ['security_mode' => 'standard', 'security_acknowledged' => false])), 'Standard mode requires explicit administrator risk acknowledgement');
+rejects(fn () => ConnectionOptions::validate(array_replace($options, ['tls' => false, 'security_acknowledged' => false])), 'Legacy tls=false form/API input cannot bypass explicit acknowledgement, even on loopback');
 expect(ConnectionOptions::validate($options + ['tls' => false], true)['security_mode'] === 'standard', 'Only trusted already-stored 0.1 local profiles retain legacy non-TLS compatibility');
-rejects(fn () => ConnectionOptions::validate($options + ['security_mode' => 'unverified_tls']), 'Unverified TLS requires explicit administrator risk acknowledgement');
-rejects(fn () => ConnectionOptions::validate($options + ['security_mode' => 'standard', 'security_acknowledged' => 'false']), 'String false cannot authorize a weaker security mode');
+rejects(fn () => ConnectionOptions::validate(array_replace($options, ['security_mode' => 'unverified_tls', 'security_acknowledged' => false])), 'Unverified TLS requires explicit administrator risk acknowledgement');
+rejects(fn () => ConnectionOptions::validate(array_replace($options, ['security_mode' => 'standard', 'security_acknowledged' => 'false'])), 'String false cannot authorize a weaker security mode');
 $plain = ConnectionOptions::validate(array_replace($options, ['host' => 'db.example.com', 'security_mode' => 'standard', 'security_acknowledged' => true, 'tls_ca' => 'D:/not-required.pem']));
 expect($plain['tls'] === false && $plain['tls_ca'] === '', 'Explicit remote standard mode works without a readable CA path');
 expect(!isset(\Box\Mod\Whmcsmigrator\Source\ConnectionFactory::attributes($plain)[PDO::MYSQL_ATTR_SSL_CA]), 'Standard PDO attributes do not request TLS or require a TLS hostname/CA');
@@ -51,16 +51,12 @@ expect(\Box\Mod\Whmcsmigrator\Source\PublicIp::parse("8.8.8.8\n") === '8.8.8.8',
 foreach (['127.0.0.1', '192.168.1.1', '::1', '<script>8.8.8.8</script>', 'not-an-ip'] as $invalidIp) {
     rejects(fn () => \Box\Mod\Whmcsmigrator\Source\PublicIp::parse($invalidIp), 'IP response parser rejects private/non-IPv4/non-IP response: ' . $invalidIp);
 }
-$dbZone = ['session_timezone' => 'America/Chicago', 'server_timezone' => 'SYSTEM', 'offset_seconds' => -21600];
-$zone = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::detect([], $dbZone);
-expect($zone['timezone'] === null && $zone['status'] === 'unverified' && $zone['database']['session_utc_offset'] === '-06:00', 'Database IANA timezone/offset is evidence only, not an assumed WHMCS timezone');
-$candidate = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::detect([['setting' => 'Timezone', 'value' => 'Asia/Kolkata']], $dbZone);
-expect($candidate['detected_timezone'] === 'Asia/Kolkata' && $candidate['timezone'] === null, 'Exact application-setting candidate is detected without falsely proving PHP runtime behavior');
-$confirmedZone = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::override($candidate, 'Asia/Kolkata');
-expect($confirmedZone['timezone'] === 'Asia/Kolkata' && $confirmedZone['confidence'] === 'administrator_verified', 'Explicitly verified application timezone takes priority over conflicting database timezone');
-rejects(fn () => \Box\Mod\Whmcsmigrator\Source\SourceTimezone::override($zone, '-06:00'), 'A database UTC offset cannot be promoted to a historical IANA timezone');
-$conflicting = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::detect([['setting' => 'Timezone', 'value' => 'UTC'], ['setting' => 'SystemTimezone', 'value' => 'America/Chicago']], $dbZone);
-expect($conflicting['detected_timezone'] === null && $conflicting['status'] === 'unverified', 'Conflicting application timezone candidates fail closed');
+$zone = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::unselected();
+expect($zone['timezone'] === null && $zone['status'] === 'unverified' && $zone['method'] === 'administrator_selection_required', 'No automatic timezone inference remains; an unselected source stays unverified');
+$selectedZone = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::selected('Asia/Kolkata');
+expect($selectedZone['timezone'] === 'Asia/Kolkata' && $selectedZone['confidence'] === 'administrator_verified' && $selectedZone['method'] === 'administrator_selected_application_timezone', 'Administrator-selected application timezone is recorded as verified profile evidence');
+expect(\Box\Mod\Whmcsmigrator\Source\SourceTimezone::selected('America/Chicago')['timezone'] === 'America/Chicago', 'Default dropdown timezone is a valid selectable IANA identifier');
+rejects(fn () => \Box\Mod\Whmcsmigrator\Source\SourceTimezone::selected('-06:00'), 'A UTC offset cannot be promoted to a historical IANA timezone');
 $timestampSchema = ['tblclients' => ['suffix' => 'clients', 'columns' => ['datecreated' => ['type' => 'timestamp']]]];
 rejects(fn () => \Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($timestampSchema, ['tblclients'], 'reference_native'), 'Session-converted MySQL TIMESTAMP storage cannot masquerade as application-local DATETIME');
 \Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($timestampSchema, ['tblclients'], 'archive');

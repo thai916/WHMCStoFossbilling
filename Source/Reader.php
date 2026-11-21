@@ -23,7 +23,7 @@ final class Reader
         $this->connection = ConnectionFactory::status($this->pdo, $options['security_mode']) + ['database' => $options['database']];
         $version = (string) $this->pdo->query('SELECT VERSION()')->fetchColumn();
         $this->mysql = stripos($version, 'MariaDB') === false;
-        GrantPolicy::verify($this->pdo->query('SHOW GRANTS FOR CURRENT_USER')->fetchAll(\PDO::FETCH_COLUMN), $options['database']);
+        $this->connection['privileges'] = GrantPolicy::inspect($this->pdo, $options['database'], $version);
         try {
             $isolation = $this->pdo->query('SELECT @@SESSION.transaction_isolation')->fetchColumn();
         } catch (\PDOException $error) {
@@ -127,20 +127,6 @@ final class Reader
         $version = $s->fetchColumn();
 
         return is_string($version) && preg_match('/\A\d+\.\d+(?:\.\d+)?(?:[-+.\w]*)\z/D', $version) ? $version : null;
-    }
-
-    public function timezone(array $schema): array
-    {
-        $database = $this->pdo->query('SELECT @@session.time_zone AS session_timezone, @@global.time_zone AS server_timezone, NOW() AS server_now, UTC_TIMESTAMP() AS utc_now, TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS offset_seconds')->fetch();
-        $settings = [];
-        $table = $this->options['prefix'] . 'configuration';
-        if (isset($schema[$table]['columns']['setting'], $schema[$table]['columns']['value'])) {
-            $query = $this->pdo->prepare('SELECT ' . $this->hint() . ' `setting`,CASE WHEN OCTET_LENGTH(`value`)<=128 THEN `value` ELSE NULL END AS `value` FROM ' . self::identifier($table) . ' WHERE BINARY `setting` IN (' . implode(',', array_fill(0, count(SourceTimezone::SETTINGS), '?')) . ') LIMIT 17');
-            $query->execute(SourceTimezone::SETTINGS);
-            $settings = $query->fetchAll();
-        }
-
-        return SourceTimezone::detect($settings, $database);
     }
 
     public function bounds(string $name, array $definition): array

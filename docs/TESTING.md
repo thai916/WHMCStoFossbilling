@@ -7,6 +7,7 @@ Run these from the FOSSBilling root using the PHP executable that serves the app
 ```powershell
 $php = 'D:\Laragon\bin\php\php-8.4.28-Win32-vs17-x64\php.exe'
 & $php modules/Whmcsmigrator/tests/unit.php
+& $php modules/Whmcsmigrator/tests/grants.php
 & $php modules/Whmcsmigrator/tests/security.php
 & $php modules/Whmcsmigrator/tests/render.php
 & $php modules/Whmcsmigrator/tests/integration.php --disposable-databases
@@ -51,9 +52,24 @@ Actual PDO tests cover:
   statements: SELECT/SHOW safety metadata, READ ONLY start and rollback only.
 - Fixture restart with TLS disabled: both TLS modes refuse before sending
   credentials, while explicitly selected standard mode still works.
+- Real cPanel-style escaped database SELECT grants, host-specific accounts,
+  sanitized privilege-scope reporting and fixture-only partial-revokes startup
+  semantics. Stored backslashes are never blindly stripped in literal-name mode.
 
 The private fixture's DBA creates the synthetic schema/users and shuts down only
 that fixture server. Those setup/cleanup operations are not source-reader queries.
+
+## Grant-validation regression suite
+
+`tests/grants.php` uses no database/network connection. It covers cPanel escaped
+underscores, quoted/doubled identifiers, account host forms, whitespace/case,
+MySQL/ANSI and MariaDB authentication/resource-clause syntax, column/table scope,
+scope-pattern/partial-revoke semantics, forbidden privileges/delegation and
+privacy of success/failure messages. Controlled PDO fixtures verify the preferred
+`SHOW GRANTS FOR CURRENT_USER()` query, syntax-only fallback, denied/empty
+inspection and unavailable optional metadata. Roles and ambiguous/restricted
+grants still fail closed instead of being reported as a missing database grant.
+MariaDB syntax is tested as fixture text; an actual MariaDB server was not run.
 
 ## Browser harness
 
@@ -67,7 +83,7 @@ $env:WM_CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
 node modules/Whmcsmigrator/tests/browser.cjs
 ```
 
-The harness uses a synthetic API, the real extension Twig template/JS/CSS, the installed admin stylesheets and a minimal test-only layout. It verifies all three explicitly selected security modes, required risk confirmations, conditional CA fields, actual-state success display, no default UTC assumption, automatic timezone evidence and verified override without password resubmission. It also covers the existing IP controls, mapping/exclusions, preview/start separation, schema-upgrade confirmation, legacy search, financial discrepancies/missing values, safe text rendering, no browser storage and desktop/mobile layout. API responses are synthetic, not real admin writes, MySQL handshakes or external lookups. Clipboard wiring does not change the user's clipboard.
+The harness uses a synthetic API, the real extension Twig template/JS/CSS, the installed admin stylesheets and a minimal test-only layout. It verifies the standard no-TLS default plus all three explicitly selected security modes, required risk confirmations, conditional CA fields, actual-state success display in dark green, the required WHMCS timezone dropdown defaulting to America/Chicago and submitted with the connection test, and no separate timezone-inspection/override request. It also covers the existing IP controls, mapping/exclusions, preview/start separation, schema-upgrade confirmation, legacy search, financial discrepancies/missing values, safe text rendering, no browser storage and desktop/mobile layout. API responses are synthetic, not real admin writes, MySQL handshakes or external lookups. Clipboard wiring does not change the user's clipboard.
 
 It also checks that the actual local admin page requires login when unauthenticated.
 
@@ -126,8 +142,8 @@ Without a pre-development baseline, the script refuses to claim unchanged files.
 ## Latest local verification — 2026-11-21
 
 - PHP syntax checks and JavaScript syntax checks passed.
-- Version 0.2: unit 93 assertions; endpoint security 25; render/module discovery 10; disposable migration integration 180; disposable TLS/connection server 15.
-- All 45 PHP files and both JavaScript files pass syntax checks. Connection policy, actual encryption/identity, query-log read-only enforcement, timezone evidence/override snapshots, client DATETIME conversion/date-only preservation and existing migration regressions pass.
+- Current local changes replacing the 0.2 artifact: grant syntax/inspection 77 assertions; unit 92; endpoint security 25; render/module discovery 11; disposable migration integration 180; disposable TLS/connection server 20.
+- All 46 PHP files and both JavaScript files pass syntax checks. Connection policy, actual encryption/identity, cPanel grant recognition, query-log read-only enforcement, administrator-selected timezone snapshots, client DATETIME conversion/date-only preservation and existing migration regressions pass.
 - Expanded synthetic browser tests passed, as did the actual unauthenticated local login gate. Authenticated real-admin end-to-end verification remains pending.
 - Integrity checked 8,100 baseline files but **did not pass**: `config.php` differs and `config.old.php` exists outside the extension. Both were left untouched; their origin is not established by the checker. Approved cache/log changes are separately listed in `.local/integrity-result.json`. Do not describe this result as zero external changes or reset the baseline to conceal the differences.
 - Bundled CA certificates parse as real X.509 certificates, and the downloaded file SHA-256 matches the HTTPS upstream checksum. A separate explicitly requested CLI public-IP lookup succeeded over verified HTTPS; this does not prove remote MySQL TLS compatibility.

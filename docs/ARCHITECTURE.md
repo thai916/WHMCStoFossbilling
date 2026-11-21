@@ -14,7 +14,7 @@ The local installed requirements demand PHP 8.3+. Laragon Apache configuration p
 |---|---|
 | `Controller/` | Authorized admin page and allowlisted JS/CSS delivery |
 | `Api/` | Identity, endpoint permissions, POST, CSRF, origin checks and sanitized errors |
-| `Source/` | Explicit connection-security policy, sanitized diagnostics/TLS preflight, timezone evidence, privilege verification, fixed reads and keyset extraction |
+| `Source/` | Explicit connection-security policy, sanitized diagnostics/TLS preflight, administrator-selected timezone policy, privilege verification, fixed reads and keyset extraction |
 | `Mapping/` | Versioned field-disposition registry and allowlisted text transforms |
 | `Security/` | Safe errors, conservative sensitive-data policy and AES-256-GCM credential vault |
 | `Installation/` | Idempotent extension-only DDL |
@@ -107,11 +107,11 @@ Event timestamps require a confirmed IANA source timezone and a UTC destination.
 
 The source account must have a direct database-wide SELECT grant and no write, EXECUTE, FILE, grant-option or role/proxy privileges. Global SELECT is rejected. Inspection never attempts a source write to test permissions.
 
-The source PDO interface exposes only fixed metadata/WHMCS reads and a read-only transaction. Identifiers are validated independently of prepared values. Views are excluded. Configuration values are not read wholesale: only the WHMCS version and bounded, allowlisted timezone-named candidates are queried. Generic configuration archives remain excluded.
+The source PDO interface exposes only fixed metadata/WHMCS reads and a read-only transaction. Identifiers are validated independently of prepared values. Views are excluded. Configuration values are not read wholesale: only the WHMCS version setting is queried. Generic configuration archives remain excluded.
 
-Verified TLS remains the default. Explicitly acknowledged unverified TLS still requires actual encryption; explicitly acknowledged standard MySQL requests no TLS and no CA. Credential-free TLS preflight and actual PDO cipher checks prevent secure modes silently downgrading. Warnings/driver errors are classified into fixed messages, never echoed. Only the WHMCS source connection is affected.
+Standard MySQL without TLS is the default and requires explicit acknowledgement. Explicitly acknowledged unverified TLS still requires actual encryption; verified TLS checks the certificate chain/hostname. Credential-free TLS preflight and actual PDO cipher checks prevent secure modes silently downgrading. Warnings/driver errors are classified into fixed messages, never echoed. Only the WHMCS source connection is affected.
 
-Timezone metadata comes from fixed SELECTs, never remote PHP execution or SET commands. Database timezone/offset and arbitrary timezone-like configuration rows cannot prove the remote PHP/application setting or historical changes. Inconclusive evidence stays Unverified until an administrator confirms an application IANA timezone. No FOSSBilling/UTC default or offset-to-IANA inference is used. Overrides update only encrypted profile metadata; run plans freeze the evidence and security mode. DATETIME client registration now uses the shared event/DST validator instead of assuming UTC.
+The WHMCS application timezone is selected by the administrator in an IANA dropdown defaulting to America/Chicago; no timezone SELECTs, remote PHP execution or SET commands are used. An empty selection stays Unverified and blocks timezone-sensitive native records. No FOSSBilling/UTC default or offset-to-IANA inference is used. Selections update only encrypted profile metadata; run plans freeze the selection and security mode. DATETIME client registration uses the shared event/DST validator instead of assuming UTC.
 
 Credentials use authenticated encryption derived from the existing installation secret with a module-specific HKDF context. They are never returned by an API. No plaintext credential files are created. Admin APIs require a browser session CSRF token even for read-only operations.
 

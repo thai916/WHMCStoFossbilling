@@ -86,17 +86,12 @@ const server = http.createServer((request, response) => {
                         assert.equal(data.tls_ca, undefined, "Non-verified modes do not submit hidden CA inputs");
                         assert.equal(data.security_acknowledged, true);
                     }
-                    assert.equal(data.source_timezone, undefined, "Automatic timezone inspection does not submit an assumed timezone");
+                    assert.equal(data.source_timezone, "America/Chicago", "Selected WHMCS timezone is submitted with the connection test");
+                    assert.equal(data.source_timezone_verified, "1", "Dropdown selection is submitted as an explicit administrator selection");
                     assert.equal(data.confirm_whmcs8, "", "Auto-detect is the default version policy");
-                    source.connection_status = { successful: true, security_mode: data.security_mode, tls_active: data.security_mode !== "standard", server_identity_verified: data.security_mode === "verified_tls", database: "synthetic", table_availability: { available: true, tables_found: 6 } };
-                    source.source_timezone = "";
-                    source.timezone_detection = { status: "unverified", timezone: null, detected_timezone: null, method: "database_observation_only", confidence: "insufficient", automatic_inconclusive: true, database: { session_timezone: "SYSTEM", server_timezone: "SYSTEM", session_utc_offset: "-06:00" }, php_runtime_timezone: "unavailable_via_database", warning: "MySQL offset does not prove the WHMCS application timezone." };
-                    result = source; break;
-                case "timezone_confirm":
-                    assert.equal(data.confirmation, "VERIFY SOURCE TIMEZONE");
-                    assert.equal(data.timezone, "Asia/Kolkata");
-                    source.source_timezone = data.timezone;
-                    source.timezone_detection = { ...source.timezone_detection, timezone: data.timezone, status: "verified", method: "administrator_verified_application_timezone", confidence: "administrator_verified" };
+                    source.connection_status = { successful: true, security_mode: data.security_mode, tls_active: data.security_mode !== "standard", server_identity_verified: data.security_mode === "verified_tls", database: "synthetic", table_availability: { available: true, tables_found: 6 }, privileges: { summary: "Database-wide SELECT verified; no non-SELECT privileges or delegation detected.", detected_scopes: ["database SELECT"], matched_by: ["escaped database identifier"] } };
+                    source.source_timezone = data.source_timezone;
+                    source.timezone_detection = { status: "verified", timezone: data.source_timezone, detected_timezone: null, method: "administrator_selected_application_timezone", confidence: "administrator_verified", automatic_inconclusive: false, warning: "Saved only in this extension profile." };
                     result = source; break;
                 case "public_ip":
                     assert.deepEqual(data, { confirmation: "LOOK UP PUBLIC IP" }, "IP lookup sends no database credentials");
@@ -133,9 +128,8 @@ const server = http.createServer((request, response) => {
         assert.equal(await page.locator("#wm-next").isDisabled(), true);
         assert.equal(requests.includes("test_connection"), false, "No connection runs on page load");
         assert.equal(requests.includes("public_ip"), false, "No external IP lookup runs on page load");
-        assert.equal(await page.locator("#wm-timezone").inputValue(), "", "No UTC/application timezone is silently assumed");
-        assert.equal(await page.locator("#wm-timezone-override").isVisible(), false, "Override is offered only after an inconclusive detection");
-        assert.equal(await page.locator("#wm-security-mode").inputValue(), "verified_tls");
+        assert.equal(await page.locator("#wm-timezone").inputValue(), "America/Chicago", "WHMCS timezone dropdown defaults to America/Chicago without automatic inspection");
+        assert.equal(await page.locator("#wm-security-mode").inputValue(), "standard", "Standard no-TLS connection is the default");
         assert.equal(await page.locator("#wm-version").inputValue(), "");
         assert.ok((await page.locator("#wm-ca").inputValue()).length > 0);
         assert.equal(await page.locator(".wm-logo").evaluate(img => img.complete && img.naturalWidth > 0), true, "Supplied PNG loads");
@@ -159,7 +153,7 @@ const server = http.createServer((request, response) => {
         await page.locator("#wm-host").fill("127.0.0.1");
         await page.locator("#wm-database").fill("synthetic");
         await page.locator("#wm-username").fill("reader");
-        for (const mode of ["verified_tls", "unverified_tls", "standard"]) {
+        for (const mode of ["standard", "verified_tls", "unverified_tls"]) {
             await page.locator("#wm-security-mode").selectOption(mode);
             await page.locator("#wm-password").fill("synthetic-only");
             assert.equal(await page.locator("#wm-tls-settings").isVisible(), mode === "verified_tls");
@@ -174,16 +168,16 @@ const server = http.createServer((request, response) => {
             assert.match(await page.locator("#wm-source-status").innerText(), /Connection successful/);
             assert.equal(source.connection_status.security_mode, mode);
         }
-        assert.deepEqual(testedModes, ["verified_tls", "unverified_tls", "standard"]);
-        assert.match(await page.locator("#wm-source-status").innerText(), /No — unencrypted connection/);
-        assert.match(await page.locator("#wm-timezone-evidence").innerText(), /Unverified/);
-        assert.match(await page.locator("#wm-timezone-evidence").innerText(), /-06:00/);
-        assert.equal(await page.locator("#wm-timezone").inputValue(), "", "MySQL offset never preselects an inferred IANA timezone");
-        await page.locator("#wm-timezone").selectOption("Asia/Kolkata");
-        await page.locator("#wm-timezone-verified").check();
-        await page.locator("#wm-timezone-save").click();
-        await page.waitForFunction(() => document.getElementById("wm-timezone-evidence").textContent.includes("administrator_verified"));
-        assert.equal(requests.filter(method => method === "test_connection").length, 3, "Timezone override saves without reconnecting or resubmitting a password");
+        assert.deepEqual(testedModes, ["standard", "verified_tls", "unverified_tls"]);
+        assert.match(await page.locator("#wm-source-status").innerText(), /Database-wide SELECT verified/);
+        assert.match(await page.locator("#wm-source-status").innerText(), /escaped database identifier/);
+        assert.match(await page.locator("#wm-source-status").innerText(), /WHMCS server timezone/);
+        assert.match(await page.locator("#wm-source-status").innerText(), /America\/Chicago/);
+        assert.equal(await page.locator("#wm-timezone").inputValue(), "America/Chicago", "Selected timezone remains in the dropdown without any inference");
+        assert.equal(source.source_timezone, "America/Chicago");
+        assert.equal(await page.locator("#wm-source-status h4").getAttribute("class"), "wm-success", "Successful connection message uses the dark green class");
+        assert.equal(await page.locator("#wm-source-status h4").evaluate(el => getComputedStyle(el).color), "rgb(11, 93, 42)", "Successful connection message renders in dark green");
+        assert.equal(requests.includes("timezone_confirm"), false, "Timezone is saved with the connection test; no separate override request exists");
         await page.locator("#wm-next").click();
         await page.locator("#wm-field-search").fill("password");
         assert.match(await page.locator("#wm-fields").innerText(), /Excluded sensitive field/);
@@ -218,7 +212,7 @@ const server = http.createServer((request, response) => {
         await page.screenshot({ path: path.join(artifacts, "mobile.png"), fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile connection page has no horizontal overflow");
         assert.deepEqual(errors, [], "No browser JavaScript errors");
-        console.log("PASS: synthetic browser wizard, all three explicitly selected security modes, risk confirmations, conditional CA fields, automatic timezone evidence/verified override, connection diagnostics, explicit public-IP controls, schema upgrade, historical preview/resume, legacy search, financial displays, XSS protection, no browser storage, desktop/mobile layout");
+        console.log("PASS: synthetic browser wizard, standard no-TLS default plus all explicitly selected security modes, risk confirmations, conditional CA fields, explicit WHMCS timezone dropdown with America/Chicago default, dark-green success text, connection diagnostics, explicit public-IP controls, schema upgrade, historical preview/resume, legacy search, financial displays, XSS protection, no browser storage, desktop/mobile layout");
         const livePage = await browser.newPage();
         await livePage.goto("http://fossbill.test/admin/whmcsmigrator");
         await livePage.waitForLoadState("networkidle");

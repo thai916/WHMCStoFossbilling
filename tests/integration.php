@@ -145,10 +145,10 @@ try {
     expect($profile['schema']['tblconfiguration']['classification'] === 'excluded_sensitive', 'Operational configuration excluded');
     expect($profile['connection_status']['successful'] && $profile['connection_status']['security_mode'] === 'standard' && !$profile['connection_status']['tls_active'] && !$profile['connection_status']['server_identity_verified'], 'Successful test reports real security/encryption/identity state without claiming TLS for standard mode');
     expect($profile['connection_status']['database'] === $sourceDb && $profile['connection_status']['table_availability']['available'] && !str_contains(json_encode($profile), $password), 'Connection response includes database/table availability but never the password');
-    $unknownZone = $service->testConnection(array_replace($options, ['source_timezone' => '']));
-    expect($unknownZone['source_timezone'] === '' && $unknownZone['timezone_detection']['status'] === 'unverified' && $unknownZone['timezone_detection']['database']['session_utc_offset'] !== null, 'Real MySQL timezone SELECT returns offset evidence without assuming it is the WHMCS timezone');
+    $unknownZone = $service->testConnection(array_replace($options, ['source_timezone' => '', 'source_timezone_verified' => true]));
+    expect($unknownZone['source_timezone'] === '' && $unknownZone['timezone_detection']['status'] === 'unverified' && $unknownZone['timezone_detection']['method'] === 'administrator_selection_required', 'No submitted timezone leaves the source unverified without inspecting MySQL offsets');
     $profile = $service->confirmSourceTimezone($profile['source_id'], 'UTC');
-    expect($profile['source_timezone'] === 'UTC' && $profile['timezone_detection']['confidence'] === 'administrator_verified', 'Optional verified override updates only the encrypted extension profile');
+    expect($profile['source_timezone'] === 'UTC' && $profile['timezone_detection']['confidence'] === 'administrator_verified', 'Explicit application timezone selection updates only the encrypted extension profile');
     rejects(fn () => $service->confirmSourceTimezone($profile['source_id'], '-06:00'), 'Database offset cannot authorize timezone-sensitive imports as a fake IANA region');
     expect($sourceDigest() === $before, 'Connection testing and timezone confirmation never modify synthetic source records');
     foreach ([
@@ -181,7 +181,7 @@ try {
         $service->createRun($runInput + ['mode' => 'reference_native', 'confirmation' => 'PRESERVE HISTORY', 'backup_verified' => true, 'backup_reference' => 'disposable timezone fixture', 'accept_limitations' => true], 1);
         expect(false, 'Unverified source timezone must block native event authorization');
     } catch (SafeException $error) {
-        expect(str_contains($error->getMessage(), 'timezone is Unverified'), 'Unverified automatic timezone evidence blocks native event authorization before any business-record publication');
+        expect(str_contains($error->getMessage(), 'timezone is Unverified'), 'An unselected timezone blocks native event authorization before any business-record publication');
     }
     expect((int) $service->store()->one('SELECT COUNT(*) AS n FROM client')['n'] === 0 && (int) $service->store()->one('SELECT COUNT(*) AS n FROM invoice')['n'] === 0, 'All connection/timezone tests and failed preflight leave destination business tables empty');
     $service->confirmSourceTimezone($profile['source_id'], 'UTC');
