@@ -26,15 +26,53 @@
         $("notice").className = `alert ${danger ? "alert-danger" : "alert-info"}`;
         $("notice").textContent = text;
     };
+    function scrollToTop() {
+        // Admin themes can scroll a content container instead of the document.
+        for (let node = root.parentElement; node; node = node.parentElement) {
+            if (node.scrollHeight > node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) {
+                node.scrollTo({ top: 0, left: 0, behavior: "instant" });
+            }
+        }
+        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    }
+    function sessionError(message) {
+        const error = new Error(message);
+        error.kind = "session";
+        return error;
+    }
     async function api(method, data = {}, download = false) {
-        const response = await fetch(`${root.dataset.api.replace(/\/$/, "")}/${method}`, {
-            method: "POST", credentials: "same-origin", cache: "no-store",
-            headers: { "Content-Type": "application/json", "X-CSRF-TOKEN": root.dataset.csrf },
-            body: JSON.stringify(data), signal: AbortSignal.timeout(30000)
-        });
+        const endpoint = new URL(`${root.dataset.api.replace(/\/$/, "")}/${method}`, location.href);
+        if (endpoint.origin !== location.origin) throw sessionError("The wizard API address does not match this FOSSBilling address. Open the wizard using the configured FOSSBilling address and sign in again. No request was sent.");
+        let response;
+        try {
+            response = await fetch(endpoint.href, {
+                method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error",
+                headers: { "Content-Type": "application/json", "X-CSRF-TOKEN": root.dataset.csrf },
+                body: JSON.stringify(data), signal: AbortSignal.timeout(30000)
+            });
+        } catch (error) {
+            if (error.name === "TimeoutError" || error.name === "AbortError") throw error;
+            throw new Error("The FOSSBilling API request could not be completed. Check your connection and open the wizard at the configured FOSSBilling address. Redirects are refused; sign in again if your session expired. No automatic retry was sent.");
+        }
         if (download && response.ok && response.headers.get("Content-Disposition")?.startsWith("attachment")) return response.blob();
-        const result = await response.json();
-        if (!response.ok || result.error) throw new Error(result.error?.message || "Request failed. Stop and review the server status before retrying.");
+        let result;
+        try { result = await response.json(); } catch {
+            throw sessionError("FOSSBilling returned an unexpected response instead of API data. Your administrator session may have expired. Sign in again and reload the wizard; if this continues, check the FOSSBilling URL and server routing.");
+        }
+        if (response.status === 401 && !result?.error) throw sessionError("FOSSBilling could not authenticate your administrator session. Sign in to FOSSBilling again, reload this wizard, and select your saved source. This is not a WHMCS database password error.");
+        if (!result || typeof result !== "object") throw new Error("FOSSBilling returned an invalid API response. Stop and check the server before retrying.");
+        if (!response.ok || result.error) {
+            const message = result.error?.message || "Request failed. Stop and review the server status before retrying.";
+            if ([201, 202, 203, 204, 205, 206].includes(Number(result.error?.code)) || /^authentication failed$/i.test(message.trim())) {
+                throw sessionError("FOSSBilling could not authenticate your administrator session. Sign in to FOSSBilling again, reload this wizard, and select your saved source. This is not a WHMCS database password error.");
+            }
+            if (/csrf token invalid|valid csrf token is required/i.test(message)) {
+                throw sessionError("Your FOSSBilling security token is no longer valid. Reload the wizard and sign in again if prompted, then select your saved source. No security check was bypassed.");
+            }
+            const error = new Error(message);
+            error.code = result.error?.code;
+            throw error;
+        }
         return result.result;
     }
     const handle = fn => async event => {
@@ -44,6 +82,12 @@
         try { await fn(event); } catch (error) {
             pumping = false;
             notice(error.name === "TimeoutError" ? "The response timed out. No further batches were scheduled. Refresh run status before resuming." : error.message, true);
+            if (error.pendingTables?.length) {
+                const details = element("details");
+                details.append(element("summary", `${error.pendingTables.length} tables still need count refresh`), element("p", error.pendingTables.join(", ")));
+                $("notice").append(details);
+            }
+            if (error.kind === "session" || event?.currentTarget?.id === "wm-authorize") scrollToTop();
         } finally { if (button) button.disabled = false; }
     };
     function step(name) {
@@ -148,15 +192,24 @@
         renderTables();
     }
     $("connection").addEventListener("submit", handle(async () => {
+        $("connection").setAttribute("aria-busy", "true");
+        $("connection-loader").classList.remove("d-none");
+        $("connection-button-label").textContent = "Testing connection…";
         notice("Testing the selected source security mode, SELECT-only privileges, schema and selected server timezone. No import is running.");
         const values = Object.fromEntries(new FormData($("connection")));
         values.security_acknowledged = $("security-acknowledged").checked;
-        const result = await api("test_connection", values);
-        $("password").value = "";
-        delete values.password;
-        useSource(result);
-        await dashboard();
-        notice("Connection verified. Review every mapping and excluded table before proceeding.");
+        try {
+            const result = await api("test_connection", values);
+            useSource(result);
+            await dashboard();
+            notice("Connection verified. Review every mapping and excluded table before proceeding.");
+        } finally {
+            $("password").value = "";
+            delete values.password;
+            $("connection").setAttribute("aria-busy", "false");
+            $("connection-loader").classList.add("d-none");
+            $("connection-button-label").textContent = "Test connection";
+        }
     }));
     $("sources").addEventListener("change", handle(async () => {
         if ($("sources").value) useSource(await api("mapping_get", { source_id: Number($("sources").value) }));
@@ -303,6 +356,17 @@
     }
     $("table-search").addEventListener("input", filterTables);
     $("tables").addEventListener("change", filterTables);
+    function describeMode() {
+        const descriptions = {
+            historical_native: "Creates supported clients, products, closed support conversations and emails, plus eligible historical invoices, payments, credit and inactive hosting. Other supported selected records stay in the private archive. Includes inactive and closed client history where supported; this is not a complete live billing cutover.",
+            reference_native: "Creates supported clients, products, closed support conversations and emails. Financial and service history stays in the private archive rather than becoming normal FOSSBilling billing or service records.",
+            archive: "Saves supported selected WHMCS records in the private archive for administrator lookup. Does not create normal FOSSBilling clients, invoices, payments or services."
+        };
+        $("mode-description").textContent = descriptions[$("mode").value];
+        $("historical-mode-note").classList.toggle("d-none", $("mode").value !== "historical_native");
+    }
+    $("mode").addEventListener("change", describeMode);
+    describeMode();
     async function analyzeTables(tables, sourceId) {
         for (let index = 0; index < tables.length; index++) {
             if (source?.source_id !== sourceId) throw new Error("The selected source changed. Review the source and tables before trying again. No run was created.");
@@ -312,7 +376,9 @@
             try {
                 result = await api("analyze_table", { source_id: sourceId, table });
             } catch (error) {
-                throw new Error(`${error.message} Counts still need refreshing for: ${tables.slice(index).join(", ")}. No run was created. Test the connection again if the schema changed.`);
+                error.pendingTables = tables.slice(index);
+                if (error.kind !== "session") error.message = `${error.message} Count refresh stopped at ${table}. No run was created.`;
+                throw error;
             }
             counts.set(table, result.count);
             const node = [...$("tables").querySelectorAll("[data-table-count]")].find(item => item.dataset.tableCount === table);
@@ -348,6 +414,8 @@
     async function createRun(mode, extra = {}) {
         if (preparing) return;
         preparing = true;
+        scrollToTop();
+        notice("Preparing your paused run. Checking mappings and read-only table counts; no import is running.");
         try {
             if (!source) throw new Error("Select a source first.");
             const sourceId = source.source_id, selection = selectedTables(), target = mode === "dry_run" ? $("mode").value : mode;
@@ -358,12 +426,12 @@
             run = await api("run_create", { source_id: sourceId, tables: selection, mode, ...extra, target_mode: target });
             // Reveal the successful run even if refreshing the dashboard subsequently fails.
             renderRun(); step("progress");
-            window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+            scrollToTop();
             notice(`Run created paused. Review its mode and expected counts, then explicitly resume.${prepared.refreshed.length ? ` Read-only counts refreshed for: ${prepared.refreshed.join(", ")}.` : ""}${prepared.dependencies.length ? ` Required dependencies included: ${prepared.dependencies.join(", ")}.` : ""}`);
             await dashboard();
         } finally {
             preparing = false;
-            window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+            scrollToTop();
         }
     }
     $("dry-run").addEventListener("click", handle(async () => createRun("dry_run", { invalid_date_fallback: $("invalid-date-fallback").checked ? "1900" : "" })));
@@ -371,6 +439,11 @@
         const data = Object.fromEntries(new FormData($("authorize")));
         await createRun(data.mode, data);
     }));
+    $("authorize").addEventListener("invalid", event => {
+        event.preventDefault();
+        notice("Complete the required authorization fields: backup reference, backup and limitations confirmations, and the PRESERVE HISTORY phrase. No run was created.", true);
+        scrollToTop();
+    }, true);
     function dataTable(headers, rows) {
         const wrap = element("div", undefined, "table-responsive");
         const table = element("table", undefined, "table table-vcenter");

@@ -98,6 +98,35 @@ secrets remain excluded/redacted, and custom-field values, attachments, unknown
 tables, binary/oversized records and other unsupported cases still require review.
 Archive-only history is private legacy evidence, not a native client-portal view.
 
+## Session diagnostics, immediate scrolling and clearer choices
+
+- API URLs are origin-relative and retain an installation subdirectory; browser
+  requests retain same-origin cookies and refuse redirects or cross-origin API
+  destinations rather than sending security tokens elsewhere.
+- FOSSBilling authentication errors (201–206), HTTP 401 without an error envelope,
+  invalid CSRF tokens and non-JSON/login responses have actionable FOSSBilling
+  session guidance, separate from WHMCS database authentication and IP restrictions.
+  Analysis stops immediately; pending table names appear in a collapsed list.
+  Expired/revoked sessions still require signing in again and reloading the wizard.
+  No authentication, CSRF, fingerprint or permission check is bypassed.
+- Run creation scrolls immediately, before mapping/count requests finish, and
+  scrolls both the document and scrollable admin ancestors. Required-field
+  failures also show a top-of-page explanation without submitting a run.
+- Mode names and live plain-English explanations distinguish ordinary FOSSBilling
+  records from the private archive. **Import the most supported client history**
+  (`historical_native`) is now the wizard default. It adds supported historical
+  financial/inactive-hosting publication to client/catalog/closed-history imports;
+  all modes archive the selected supported records. Financial authorization, UTC
+  destination, private/idle-destination and eligibility restrictions still apply.
+  Selecting this default does not authorize or resume a run.
+- Testing a connection shows a visible spinner and “Testing connection…” label,
+  disables repeated submissions, announces the busy form and clears its password
+  and loading state on success, failure or timeout. Reduced motion is respected.
+
+The exact cause of an individual administrator session being rejected has not
+been established through a real authenticated admin session. The local anonymous
+API is verified to return `Authentication Failed`/201 before source access.
+
 ## Upgrade / important limits
 
 Remove the old `modules/Whmcsmigrator/` directory and install this asset as

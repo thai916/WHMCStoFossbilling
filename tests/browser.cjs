@@ -40,6 +40,7 @@ const source = {
 };
 let currentRun = null;
 let failNextCreation = false, failNextAnalysis = false;
+let connectionGate = null, preparationGate = null, analysisFailure = null, connectionFailure = null;
 const analyzedTables = new Set();
 let schemaUpgradeRequired = true;
 let ipLookups = 0;
@@ -88,7 +89,13 @@ const server = http.createServer((request, response) => {
                     assert.equal(data.confirmation, "UPGRADE EXTENSION TABLES");
                     schemaUpgradeRequired = false; result = { upgraded: true }; break;
                 case "test_connection":
+                    if (connectionGate) { const pending = connectionGate; connectionGate = null; await pending; }
                     assert.equal(data.password, "synthetic-only");
+                    if (connectionFailure) {
+                        const message = connectionFailure; connectionFailure = null;
+                        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ error: { message } }) });
+                        return;
+                    }
                     testedModes.push(data.security_mode);
                     if (data.security_mode === "verified_tls") assert.ok(data.tls_ca.length > 0);
                     else {
@@ -110,13 +117,20 @@ const server = http.createServer((request, response) => {
                     }
                     result = { ip: "8.8.8.8", provider: "https://api.ipify.org", checked_at: "2026-01-01 00:00:00" }; break;
                 case "mapping_get": result = source; break;
-                case "mapping_save": result = { profile: data.profile, validated: true }; break;
+                case "mapping_save":
+                    if (preparationGate) { const pending = preparationGate; preparationGate = null; await pending; }
+                    result = { profile: data.profile, validated: true }; break;
                 case "analysis_prepare": {
                     const tables = [...new Set([...data.tables, ...(data.target_mode !== "archive" && data.tables.includes("tblclients") ? ["tblcurrencies"] : [])])];
                     result = { tables, issues: Object.fromEntries(tables.filter(name => !analyzedTables.has(name)).map(name => [name, "missing"])) };
                     break;
                 }
                 case "analyze_table":
+                    if (analysisFailure) {
+                        const failure = analysisFailure; analysisFailure = null;
+                        await route.fulfill(failure);
+                        return;
+                    }
                     if (failNextAnalysis) {
                         failNextAnalysis = false;
                         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ error: { message: `The source schema changed while analyzing ${data.table}. Test the connection again.` } }) });
@@ -167,6 +181,9 @@ const server = http.createServer((request, response) => {
         assert.equal(await page.locator("#wm-timezone").inputValue(), "America/Chicago", "WHMCS timezone dropdown defaults to America/Chicago without automatic inspection");
         assert.equal(await page.locator("#wm-security-mode").inputValue(), "standard", "Standard no-TLS connection is the default");
         assert.equal(await page.locator("#wm-version").inputValue(), "");
+        assert.equal(await page.locator("#wm-mode").inputValue(), "historical_native", "Broadest supported native history is the default, without authorizing writes");
+        assert.match(await page.locator("#wm-mode-description").innerText(), /inactive and closed client history where supported/);
+        assert.equal(requests.includes("run_create"), false, "Default mode does not automatically create a run");
         assert.ok((await page.locator("#wm-ca").inputValue()).length > 0);
         assert.equal(await page.locator(".wm-logo").evaluate(img => img.complete && img.naturalWidth > 0), true, "Supplied PNG loads");
         assert.equal(await page.locator("#wm-schema-warning").isVisible(), true);
@@ -199,12 +216,42 @@ const server = http.createServer((request, response) => {
                 assert.equal(testedModes.length, before, "Weaker modes cannot be submitted without explicit confirmation");
                 await page.locator("#wm-security-acknowledged").check();
             }
+            let releaseConnection;
+            connectionGate = new Promise(resolve => { releaseConnection = resolve; });
             await page.getByRole("button", { name: "Test connection", exact: true }).click();
+            await page.getByRole("button", { name: "Testing connection…", exact: true }).waitFor();
+            assert.equal(await page.locator("#wm-connection-loader").isVisible(), true, "Loader stays visible while the actual request is pending");
+            assert.equal(await page.locator("#wm-test-connection").isDisabled(), true);
+            assert.equal(await page.locator("#wm-connection").getAttribute("aria-busy"), "true");
+            await page.emulateMedia({ reducedMotion: "reduce" });
+            assert.equal(await page.locator("#wm-connection-loader").evaluate(el => getComputedStyle(el).animationName), "none", "Reduced-motion users get a static loading indicator plus working text");
+            await page.emulateMedia({ reducedMotion: "no-preference" });
+            if (mode === "standard") await page.screenshot({ path: path.join(artifacts, "connection-testing.png"), fullPage: true });
+            releaseConnection();
             await page.waitForFunction(() => document.getElementById("wm-password").value === "");
+            assert.equal(await page.locator("#wm-connection-loader").isVisible(), false);
+            assert.equal(await page.locator("#wm-connection").getAttribute("aria-busy"), "false");
             assert.match(await page.locator("#wm-source-status").innerText(), /Connection successful/);
             assert.equal(source.connection_status.security_mode, mode);
         }
         assert.deepEqual(testedModes, ["standard", "verified_tls", "unverified_tls"]);
+        connectionFailure = "Database authentication failed. Check the dedicated username/password.";
+        await page.locator("#wm-password").fill("synthetic-only");
+        await page.getByRole("button", { name: "Test connection", exact: true }).click();
+        await page.getByText("Database authentication failed.", { exact: false }).waitFor();
+        assert.equal(await page.locator("#wm-connection-loader").isVisible(), false, "Loader clears on failure");
+        assert.equal(await page.locator("#wm-password").inputValue(), "", "Failed connection passwords are not kept in the form");
+        assert.doesNotMatch(await page.locator("#wm-notice").innerText(), /administrator session/, "WHMCS password errors are not mislabeled as FOSSBilling session errors");
+        await page.evaluate(() => {
+            window.TEST_ORIGINAL_TIMEOUT = AbortSignal.timeout;
+            AbortSignal.timeout = () => AbortSignal.abort(new DOMException("Synthetic timeout", "TimeoutError"));
+        });
+        await page.locator("#wm-password").fill("synthetic-only");
+        await page.getByRole("button", { name: "Test connection", exact: true }).click();
+        await page.getByText("The response timed out.", { exact: false }).waitFor();
+        assert.equal(await page.locator("#wm-connection-loader").isVisible(), false, "Loader clears on timeout");
+        assert.equal(await page.locator("#wm-test-connection").isDisabled(), false, "Test connection is available again after timeout");
+        await page.evaluate(() => { AbortSignal.timeout = window.TEST_ORIGINAL_TIMEOUT; delete window.TEST_ORIGINAL_TIMEOUT; });
         assert.match(await page.locator("#wm-source-status").innerText(), /Database-wide SELECT verified/);
         assert.match(await page.locator("#wm-source-status").innerText(), /escaped database identifier/);
         assert.match(await page.locator("#wm-source-status").innerText(), /WHMCS server timezone/);
@@ -219,6 +266,11 @@ const server = http.createServer((request, response) => {
         assert.match(await page.locator("#wm-fields").innerText(), /Excluded sensitive field/);
         await page.locator("#wm-field-search").fill("");
         await page.locator("#wm-review").click();
+        await page.locator("#wm-mode").selectOption("reference_native");
+        assert.match(await page.locator("#wm-mode-description").innerText(), /Financial and service history stays in the private archive/);
+        await page.locator("#wm-mode").selectOption("archive");
+        assert.match(await page.locator("#wm-mode-description").innerText(), /Does not create normal FOSSBilling clients/);
+        await page.locator("#wm-mode").selectOption("historical_native");
         await page.locator("#wm-analyze").click();
         await page.getByText("Selected table counts captured, including required dependencies.", { exact: false }).waitFor();
         assert.equal(await page.locator('#wm-tables input[value="tblconfiguration"]').isDisabled(), true);
@@ -267,16 +319,70 @@ const server = http.createServer((request, response) => {
         assert.equal(await page.locator("#wm-archive-total").innerText(), "Not saved", "Preview counts never claim history was saved");
         await page.locator('[data-step="analysis"]').click();
         await page.locator("#wm-mode").selectOption("archive");
+        const authorize = page.getByRole("button", { name: "Create authorized run (starts paused)", exact: true });
+        const createsBeforeInvalid = requests.filter(name => name === "run_create").length;
+        await authorize.click();
+        await page.getByText("Complete the required authorization fields:", { exact: false }).waitFor();
+        assert.equal(await page.evaluate(() => window.scrollY), 0, "Missing authorization fields scroll to the error without submitting");
+        assert.equal(requests.filter(name => name === "run_create").length, createsBeforeInvalid);
         await page.locator("#wm-backup").fill("Synthetic browser fixture — not a real authorization");
         await page.locator('[name="backup_verified"]').check();
         await page.locator('[name="accept_limitations"]').check();
         await page.locator("#wm-confirm").fill("PRESERVE HISTORY");
         const batchesBeforeAuthorization = requests.filter(name => name === "run_batch").length;
-        const authorize = page.getByRole("button", { name: "Create authorized run (starts paused)", exact: true });
+        // The actual admin layout wraps content in page/page-wrapper/page-body. Exercise
+        // a nested scrolling variant, not just the document-only minimal layout.
+        await page.evaluate(() => {
+            const main = document.querySelector("main"), wrapper = document.createElement("div");
+            wrapper.id = "nested-admin-scroll"; wrapper.className = "page-wrapper";
+            wrapper.style.cssText = "height:100vh;overflow-y:auto";
+            main.classList.add("page-body");
+            main.before(wrapper); wrapper.append(main);
+        });
+        let releasePreparation;
+        preparationGate = new Promise(resolve => { releasePreparation = resolve; });
+        const authFailureRequestCount = requests.filter(name => name === "run_create").length;
+        analysisFailure = { status: 200, contentType: "application/json", body: JSON.stringify({ error: { message: "Authentication Failed", code: 201 } }) };
+        analyzedTables.delete("tblclients");
+        await authorize.click();
+        await page.waitForFunction(() => document.getElementById("wm-notice").textContent.includes("Preparing your paused run"));
+        assert.equal(await page.locator("#nested-admin-scroll").evaluate(el => el.scrollTop), 0, "Scroll happens immediately before the pending preparation request finishes");
+        releasePreparation();
+        await page.getByText("FOSSBilling could not authenticate your administrator session.", { exact: false }).waitFor();
+        assert.doesNotMatch(await page.locator("#wm-notice").innerText(), /Test the WHMCS connection again/, "Session failure does not prescribe changing WHMCS credentials or schema");
+        assert.equal(await page.locator("#wm-notice details").getAttribute("open"), null, "Pending tables are collapsed instead of flooding the error");
+        assert.equal(requests.filter(name => name === "run_create").length, authFailureRequestCount, "Authentication failure stops before run creation");
+        assert.equal(await page.locator("#nested-admin-scroll").evaluate(el => el.scrollTop), 0, "Session failure scrolls the nested admin container");
+        for (const failure of [
+            { status: 401, contentType: "application/json", body: "{}" },
+            { status: 200, contentType: "text/html", body: "<html><title>Login</title></html>" },
+            { status: 200, contentType: "application/json", body: JSON.stringify({ error: { message: "CSRF token invalid", code: 403 } }) }
+        ]) {
+            analysisFailure = failure;
+            await authorize.click();
+            await page.waitForFunction(() => document.getElementById("wm-notice").classList.contains("alert-danger") && !document.querySelector("#wm-authorize button").disabled);
+            assert.match(await page.locator("#wm-notice").innerText(), /FOSSBilling/);
+            assert.equal(await page.locator("#nested-admin-scroll").evaluate(el => el.scrollTop), 0);
+            assert.equal(requests.filter(name => name === "run_create").length, authFailureRequestCount, "Failed session/token responses never create a run");
+        }
+        analysisFailure = { status: 401, contentType: "application/json", body: JSON.stringify({ error: { message: "Unauthorized IP", code: 1002 } }) };
+        await authorize.click();
+        await page.getByText("Unauthorized IP", { exact: false }).waitFor();
+        assert.doesNotMatch(await page.locator("#wm-notice").innerText(), /administrator session/, "IP access restrictions are not mislabeled as an expired session");
+        analysisFailure = { status: 302, headers: { location: `http://127.0.0.1:${port}/login` }, body: "" };
+        await authorize.click();
+        await page.getByText("Redirects are refused;", { exact: false }).waitFor();
+        assert.equal(requests.filter(name => name === "run_create").length, authFailureRequestCount, "A login redirect stops analysis without forwarding the request or creating a run");
+        const requestCountBeforeWrongOrigin = requests.length;
+        await page.evaluate(() => { document.getElementById("whmcstofossbilling").dataset.api = "https://wrong-origin.invalid/api/admin/whmcstofossbilling"; });
+        await authorize.click();
+        await page.getByText("The wizard API address does not match", { exact: false }).waitFor();
+        assert.equal(requests.length, requestCountBeforeWrongOrigin, "Cross-origin endpoints are refused before sending the session token");
+        await page.evaluate(() => { document.getElementById("whmcstofossbilling").dataset.api = "/api/admin/whmcstofossbilling"; });
         failNextAnalysis = true;
         analyzedTables.delete("tblclients");
         await authorize.click();
-        await page.getByText("Counts still need refreshing for: tblclients", { exact: false }).waitFor();
+        await page.getByText("Count refresh stopped at tblclients.", { exact: false }).waitFor();
         await page.waitForFunction(() => window.scrollY === 0);
         assert.match(await page.locator("#wm-notice").innerText(), /schema changed.*tblclients/);
         assert.equal(await page.evaluate(() => window.scrollY), 0, "Schema-change failure scrolls to top");
@@ -289,6 +395,7 @@ const server = http.createServer((request, response) => {
         await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("archive · paused"));
         await page.waitForFunction(() => window.scrollY === 0);
         assert.equal(await page.evaluate(() => window.scrollY), 0, "Authorized-run success scrolls to top");
+        assert.equal(await page.locator("#nested-admin-scroll").evaluate(el => el.scrollTop), 0, "Authorized-run success scrolls the nested admin container");
         assert.equal(requests.filter(name => name === "run_batch").length, batchesBeforeAuthorization, "Authorized creation remains paused without scheduling batches");
         assert.equal(await page.locator("#wm-top-progress").evaluate(el => { const box = el.getBoundingClientRect(); return box.top >= 0 && box.bottom <= window.innerHeight; }), true, "Authorized-run progress is in the viewport after creation");
         await page.screenshot({ path: path.join(artifacts, "preservation-progress.png"), fullPage: true });
@@ -319,12 +426,17 @@ const server = http.createServer((request, response) => {
         await page.screenshot({ path: path.join(artifacts, "mobile.png"), fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile connection page has no horizontal overflow");
         assert.deepEqual(errors, [], "No browser JavaScript errors");
-        console.log("PASS: synthetic browser wizard, connection modes/timezone/security controls, 43-table responsive 3/2/1-column review, selection-safe search, automatic dependency analysis, schema-change and stale-count diagnostics, successful/failed authorized creation scroll and visible progress without batch scheduling, preservation/preview summaries, zero-expected progress, opt-in invalid-date policy, preview/resume with missing-randomUUID fallback, legacy search, financial displays, XSS protection and no browser storage");
+        console.log("PASS: synthetic browser wizard, connection spinner across success/failure/timeout, default broadest history and plain-English modes, session/CSRF/HTML/401 diagnostics distinct from database/IP errors, cross-origin request refusal, immediate nested-container scrolling before preparation and after validation/failure/success, 43-table responsive 3/2/1-column review, selection-safe search, automatic dependency counts, paused authorized creation without batches, preservation/preview summaries, zero-expected progress, date fallback, missing-randomUUID idempotency, legacy search, financial displays, XSS protection and no browser storage");
         const livePage = await browser.newPage();
         await livePage.goto("http://fossbill.test/admin/whmcstofossbilling");
         await livePage.waitForLoadState("networkidle");
         assert.match(await livePage.title(), /Login/i);
         console.log("PASS: unauthenticated real local admin page requires login");
+        const unauthenticated = await livePage.request.post("http://fossbill.test/api/admin/whmcstofossbilling/analysis_prepare", { data: { source_id: 0, tables: [], target_mode: "archive" } });
+        const denied = await unauthenticated.json();
+        assert.equal(Number(denied.error?.code), 201);
+        assert.equal(denied.error?.message, "Authentication Failed");
+        console.log("PASS: actual unauthenticated local analysis API returns Authentication Failed/code 201 before source access; no login or import performed");
     } finally {
         await browser.close();
         server.close();

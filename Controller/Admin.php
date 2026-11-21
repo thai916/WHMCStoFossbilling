@@ -46,7 +46,9 @@ final class Admin implements \FOSSBilling\InjectionAwareInterface
 
         return $app->render('mod_whmcstofossbilling_index', [
             'migrator_csrf' => $this->di['session']->get('csrf_token'),
-            'migrator_api' => $this->di['url']->link('api/admin/whmcstofossbilling'),
+            // Use the current admin origin, retaining any installation subdirectory.
+            // A configured canonical hostname/scheme must not drop the browser's session cookies.
+            'migrator_api' => parse_url($this->di['url']->link('api/admin/whmcstofossbilling'), PHP_URL_PATH),
             'migrator_js' => $this->di['url']->adminLink('whmcstofossbilling/asset/wizard.js'),
             'migrator_css' => $this->di['url']->adminLink('whmcstofossbilling/asset/wizard.css'),
             'migrator_icon' => $this->di['url']->link('modules/Whmcstofossbilling/icon.png'),

@@ -16,6 +16,7 @@
 #whmcstofossbilling .wm-mapping-table td{vertical-align:middle;white-space:normal}
 #whmcstofossbilling details{margin-bottom:.5rem}
 #whmcstofossbilling details>summary{cursor:pointer;font-weight:600;padding:.5rem 0}
+#whmcstofossbilling #wm-notice details p{overflow-wrap:anywhere;max-height:12rem;overflow:auto}
 #whmcstofossbilling pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:36rem;overflow:auto}
 #whmcstofossbilling :focus-visible{outline:2px solid #206bc4;outline-offset:3px}
 #whmcstofossbilling .wm-success{color:#0b5d2a!important;font-weight:700}
@@ -26,6 +27,12 @@
 #whmcstofossbilling .card-body{padding:1.5rem}
 #whmcstofossbilling .wm-review-intro{display:grid;grid-template-columns:1fr 1fr;gap:2rem;align-items:center;margin-bottom:1.5rem}
 #whmcstofossbilling .wm-review-intro p,#whmcstofossbilling .wm-authorization-heading p{color:var(--tblr-secondary);margin-bottom:0;max-width:65ch}
+#whmcstofossbilling .wm-mode-explanation{border-left:3px solid var(--wm-blue);padding:.75rem 1rem;margin:0 0 1.5rem}
+#whmcstofossbilling .wm-mode-explanation p{margin:0 0 .5rem}
+#whmcstofossbilling .wm-mode-explanation p:last-child{margin-bottom:0}
+#whmcstofossbilling #wm-mode-limits,#whmcstofossbilling #wm-historical-mode-note{font-size:.8rem;color:var(--tblr-secondary)}
+#whmcstofossbilling .wm-spinner{display:inline-block;flex:0 0 auto;width:1rem;height:1rem;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;margin-right:.5rem;animation:wm-spin .75s linear infinite}
+@keyframes wm-spin{to{transform:rotate(360deg)}}
 #whmcstofossbilling .wm-table-toolbar{display:flex;justify-content:space-between;align-items:end;gap:1rem;margin-bottom:.75rem}
 #whmcstofossbilling .wm-table-search{flex:0 1 24rem}
 #whmcstofossbilling .wm-selection-summary{text-align:right;font-size:.8rem;color:var(--tblr-secondary)}
@@ -52,7 +59,7 @@
 @media(max-width:1100px){#whmcstofossbilling .wm-table-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:767px){#whmcstofossbilling .wm-review-intro{grid-template-columns:1fr;gap:1rem}#whmcstofossbilling .wm-analysis-actions{align-items:flex-start;flex-direction:column;gap:.75rem}#whmcstofossbilling .wm-analysis-actions p{flex:auto}#whmcstofossbilling .card-body{padding:1rem}}
 @media(max-width:540px){#whmcstofossbilling .wm-table-grid,#whmcstofossbilling .wm-preservation-summary{grid-template-columns:1fr}#whmcstofossbilling .wm-table-toolbar{align-items:stretch;flex-direction:column}#whmcstofossbilling .wm-table-search{flex:auto}#whmcstofossbilling .wm-selection-summary{text-align:left}}
-@media(prefers-reduced-motion:reduce){#whmcstofossbilling .wm-top-progress .progress-bar{transition:none}}
+@media(prefers-reduced-motion:reduce){#whmcstofossbilling .wm-top-progress .progress-bar{transition:none}#whmcstofossbilling .wm-spinner{animation:none}}
 #whmcstofossbilling #wm-connection .row{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:1rem;margin:0}
 #whmcstofossbilling #wm-connection .row>*{width:100%;margin:0;padding:0;grid-column:span 12}
 #whmcstofossbilling #wm-connection .row>.col-md-3{grid-column:span 3}

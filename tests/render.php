@@ -24,6 +24,9 @@ if (in_array('--stdout', $argv, true)) {
     expect(str_contains($html, 'not a complete billing migration'), 'Incomplete-release warning is visible');
     expect(str_contains($html, 'Test connection') && str_contains($html, 'PRESERVE HISTORY'), 'Connection and explicit authorization controls render');
     expect(str_contains($html, 'id="wm-top-progress"') && str_contains($html, 'role="progressbar"') && str_contains($html, 'id="wm-progress-percent"') && str_contains($html, 'id="wm-invalid-date-fallback"'), 'Top percentage progress bar and opt-in invalid-date policy render');
+    expect(str_contains($html, 'value="historical_native" selected') && str_contains($html, 'Import the most supported client history (default)'), 'Broadest supported historical mode is selected without changing native safety restrictions');
+    expect(str_contains($html, 'id="wm-mode-description"') && str_contains($html, 'id="wm-mode-limits"') && str_contains($html, 'administrator-only archive'), 'Plain-English mode explanations distinguish private archive preservation from client-portal visibility');
+    expect(str_contains($html, 'id="wm-connection-loader" class="wm-spinner d-none"') && str_contains($html, 'id="wm-connection-button-label"'), 'Connection spinner starts hidden with an accessible text label');
     expect(str_contains($html, 'WHMCStoFossbilling') && str_contains($html, 'id="whmcstofossbilling"') && str_contains($html, '/icon.png') && str_contains($html, 'WHMCS 8.x → FOSSBilling 0.8.9'), 'Renamed branding, root id and icon retain the actual migration direction');
     expect(str_contains($html, 'Auto-detect (recommended)') && str_contains($html, 'value="America/Chicago" selected') && !str_contains($html, 'Automatic source timezone inspection') && !str_contains($html, 'wm-timezone-evidence'), 'Version auto-detection remains while timezone uses an explicit dropdown with America/Chicago default and no automatic evidence panel');
     expect(str_contains($html, 'value="standard" selected') && str_contains($html, 'Standard MySQL Connection (No TLS) (default)') && str_contains($html, 'wm-security-acknowledged'), 'Three connection modes retain standard no-TLS as default and explicit weaker-mode confirmation');
@@ -39,5 +42,31 @@ if (in_array('--stdout', $argv, true)) {
     expect($manifest['name'] === 'WHMCStoFossbilling' && $manifest['icon_url'] === '/modules/Whmcstofossbilling/icon.png' && is_file($root . $manifest['icon_url']), 'Extension-list manifest points at the supplied local icon');
     expect($module->hasAdminController() && $module->hasService() && $module->hasSettingsPage(), 'Native module loader discovers controller, service and settings');
     expect($module->getAdminController() instanceof \Box\Mod\Whmcstofossbilling\Controller\Admin, 'Native controller autoloading works without Composer edits');
+    $controllerDi = new Pimple\Container();
+    $controllerDi['is_admin_logged'] = true;
+    $controllerDi['loggedin_admin'] = new stdClass();
+    $permission = new class {
+        public bool $checked = false;
+        public function checkPermissionsAndThrowException(...$args): void { $this->checked = $args[0] === 'whmcstofossbilling' && $args[1] === 'view'; }
+    };
+    $controllerDi['mod_service'] = $controllerDi->protect(static fn ($name) => $permission);
+    $controllerDi['session'] = new class { public function get($key): string { return 'fixture-session-csrf'; } };
+    $controllerDi['url'] = new class {
+        public string $base = 'https://configured.example/billing/';
+        public function link($path): string { return $this->base . $path; }
+        public function adminLink($path): string { return $this->base . 'admin/' . $path; }
+    };
+    $app = new class extends \Box_App {
+        public array $variables = [];
+        public function __construct() {}
+        public function render($fileName, $variableArray = []): string { $this->variables = $variableArray; return 'fixture'; }
+    };
+    $controller = $module->getAdminController();
+    $controller->setDi($controllerDi);
+    $controller->get_index($app);
+    expect($permission->checked && $app->variables['migrator_api'] === '/billing/api/admin/whmcstofossbilling', 'Controller retains admin authorization and makes API origin-relative without losing the installation subdirectory');
+    $controllerDi['url']->base = 'http://configured.example/';
+    $controller->get_index($app);
+    expect($app->variables['migrator_api'] === '/api/admin/whmcstofossbilling' && !str_contains($app->variables['migrator_api'], 'csrf'), 'Root installation API URL contains neither canonical host/scheme nor session token');
     echo "Rendering and discovery suite finished.\n";
 }
