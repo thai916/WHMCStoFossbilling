@@ -1,4 +1,4 @@
-# FOSSB to WHMCS Migrator — 0.1 development preview
+# FOSSB to WHMCS Migrator — 0.2 development preview
 
 **Migration direction: WHMCS 8.x → FOSSBilling 0.8.9.** The requested display name does not reverse the source and destination.
 
@@ -16,8 +16,10 @@ This extension is **vibe coded**. It requires independent security review and di
 - Admin navigation, four-step wizard and per-endpoint permissions.
 - Session-bound POST/CSRF checks, including when global CSRF protection is off.
 - Separate source PDO connection: direct database-scoped SELECT-only grants, explicit read-only transactions, no source write interface.
-- Verified TLS required for non-loopback database hosts; readable default CA selection with an included Mozilla trust bundle. No automatic public-IP requests.
-- Explicit administrator-requested server-side public IPv4 lookup, copy/refresh controls, and timezone/version dropdowns with safe defaults.
+- Three source-only security modes: verified TLS (default), explicitly acknowledged unverified TLS, or explicitly acknowledged standard MySQL without TLS. Secure failures never downgrade.
+- Readable default CA selection with an included Mozilla trust bundle, safe connection diagnostics and actual encryption/identity/table-availability reporting.
+- Explicit administrator-requested server-side public IPv4 lookup and copy/refresh controls. No automatic public-IP requests.
+- Automatic read-only timezone evidence inspection, confidence/method display and an optional verified application-timezone override when detection is inconclusive. No UTC or offset-to-IANA guessing.
 - WHMCS version/schema inspection, conservative sensitive-table/column exclusion.
 - Per-table preflight counts in separate requests.
 - Editable client text-field mappings, archive/skip dispositions, mapping validation and JSON profiles.
@@ -47,6 +49,8 @@ This extension is **vibe coded**. It requires independent security review and di
 
 When upgrading the initial preview, use **Upgrade extension tables only** if prompted. It requires explicit confirmation and configure/execute permission. It creates only missing `whmcsmigrator_*` tables; no core schema or business records are altered. Previously authorized native runs cannot silently acquire new adapters: cancel an old unfinished native run and create a newly reviewed plan.
 
+Upgrading 0.1 to 0.2 adds no tables. Retest saved connections to collect security/timezone diagnostics. New run plans freeze the selected security mode; changing it requires a new reviewed run rather than silently changing an old authorization.
+
 For this development installation:
 
 ```text
@@ -63,9 +67,9 @@ Apache direct requests to the module directory are denied by its own `.htaccess`
 
 1. Have your DBA create a dedicated account with **SELECT on the WHMCS database only**. Do not provide a root or normal WHMCS application account.
 2. Allowlist the destination's actual public outbound/NAT IP on the database firewall. **Show public IP** performs an explicit HTTPS request from the FOSSBilling server to `api.ipify.org`; no database credentials/customer data are sent. **Copy IP** and **Refresh public IP** are available after lookup. PHP cURL is required for this optional feature. Verify MySQL uses the same outbound route, especially with VPNs/proxies.
-3. Keep verified TLS enabled for remote databases. The CA field is prefilled from readable PHP trust configuration or the included `certificates/cacert.pem`; clearing the field selects the default again. Private/self-signed database certificates require your hosting provider's CA file. See [CA bundle provenance and maintenance](certificates/README.md). No automatic certificate downloads or verification bypasses occur. A local tunnel endpoint can be used if appropriately secured; the extension cannot verify the tunnel beyond its loopback endpoint.
+3. Choose **Connection security**. Keep **Verified TLS (Recommended)** where possible; provide a provider CA override only if needed. **TLS Without Certificate Verification (Advanced)** requires explicit risk acknowledgement and actual encryption but cannot authenticate the server. **Standard MySQL Connection (No TLS)** requires explicit risk acknowledgement; no CA or TLS-specific hostname is required, and credentials/customer data may travel unencrypted. There is no automatic fallback. See [connection modes, diagnostics and HostGator instructions](docs/CONNECTIONS.md) and [CA provenance](certificates/README.md).
 4. Test connection, then review every discovered table and field.
-5. Select the actual WHMCS IANA timezone and explicitly confirm it before native event-timestamp import. The dropdown suggests UTC but does not treat that default as verified. Version defaults to **Auto-detect**; choose the manually verified WHMCS 8.x fallback only if necessary. An incompatible detected version is always refused. Native event adapters currently require a UTC-configured destination; the extension never changes global timezone settings.
+5. Review the automatic timezone evidence after testing. MySQL timezone/offset and an application-setting candidate are not proof of the remote PHP runtime. When inconclusive, verify the actual WHMCS application timezone and save the optional override without resending the password. Otherwise remain Unverified and use archive mode for event history. Version defaults to **Auto-detect**; a manually verified 8.x fallback never overrides an incompatible detected version. Native event adapters currently require a UTC-configured destination; the extension never changes global timezone settings.
 6. Save mappings, analyze selected tables, choose the intended execution mode and create its dry run.
 7. Explicitly resume the paused preview. Review all exceptions.
 8. If the supported scope is appropriate, authorize the run with a verified backup and `PRESERVE HISTORY`. Historical financial mode additionally requires confirmation that the destination is private and otherwise idle.
@@ -88,6 +92,8 @@ Do not connect this preview to real customer data until it has been reviewed. Pr
 - A live database changes across requests. High-water IDs are bounded, but no globally consistent source snapshot exists across HTTP batches.
 - Row deletions and count mismatches require manual review. Updates to a source row behind a completed cursor require a new run.
 - Direct schema-wide SELECT grants are required. Role-based/table-only/column-only grants and global SELECT are refused conservatively.
+- Read-only database grants do not protect confidentiality on the network: unverified TLS can be impersonated, and standard MySQL can expose credentials/customer data in transit. Prefer verified TLS or an independently secured tunnel.
+- Database-only timezone inspection cannot prove PHP/configuration.php/hooks or historical timezone changes. Unverified evidence blocks timezone-sensitive native authorizations; date-only fields stay unchanged. Existing imported timestamps are never silently rewritten.
 - MySQL reads request a five-second execution limit. MariaDB-specific execution deadlines and actual network-disconnect behavior are **not verified**; PHP's PDO connection timeout is not a universal query/read deadline.
 - Value pages are byte-budgeted before fetching bodies. Oversized fields/rows are rejected in the SELECT and cannot become null archive substitutes. InnoDB/repeatable-read uses stable length/value probes; READ COMMITTED or non-snapshot engines use one bounded row/page. Other isolation levels are refused, not changed.
 - Destination strict SQL mode is required and checked, never enabled by this extension.
@@ -117,4 +123,4 @@ No live WHMCS credentials or data are bundled. `.local/`, test databases, genera
 
 ## Release status
 
-Manifest version `0.1` denotes this **experimental development preview**, not completion of the requested production migration extension. Publication as a production-ready release must wait for the remaining acceptance criteria and an independently reviewed automation-isolation strategy.
+Manifest version `0.2` denotes this **experimental development preview**, not completion of the requested production migration extension. Publication as a production-ready release must wait for the remaining acceptance criteria and an independently reviewed automation-isolation strategy. See [0.2 release notes](docs/RELEASE-0.2.md).

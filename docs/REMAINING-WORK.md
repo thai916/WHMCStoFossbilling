@@ -45,15 +45,17 @@ The requested complete WHMCS 8.x migration is not finished. Do not interpret the
 
 - Authenticated installation/activation/menu/API browser test in actual FOSSBilling.
 - Expanded synthetic browser coverage now verifies extension-schema confirmation/cancellation, historical-target preview, exact legacy-reference search and financial discrepancy/missing-value displays. This does not replace the authenticated test above.
-- Verified remote TLS success and certificate failures.
+- Actual disposable-server verified/unverified/standard connections, valid CA/IP identity, invalid trust/name, missing TLS and sanitized authentication/access failures are tested. Real-provider verified TLS and remote firewall behavior remain unverified.
 - MariaDB variants, query deadlines and required privilege visibility.
 - Large-production-volume source-load and memory/request-time tests.
 - Actual process kill, database disconnect, interrupted transaction and local service restart.
 - Duplicate request replay, overlapping-run refusal, frozen source snapshots, reconciliation restart and aggregate price-drift tests pass. Actual simultaneous-process/connection-loss crash tests remain.
 - Actual core paid-item/transaction/credit-payment/unpaid-cleanup selectors and batch methods, plus order expiration/renewal/unpaid-cleanup repositories, have been exercised against supported synthetic native records with no operational actions. This does not prove safety for blocked categories or arbitrary third-party hooks.
-- Independent source write-query audit and independent security review.
+- Actual disposable MySQL query-log audit verifies only SELECT/SHOW safety metadata, READ ONLY transaction start and rollback for the source reader; no modifying statements/SET. Independent review and auditing on other supported server/client combinations remain pending.
 - Resolve the latest baseline integrity differences (`config.php` modified, `config.old.php` added) with the installation owner. Their origin is unverified; leave them intact and do not claim a clean baseline.
 
 ## Publication gate
 
 The user subsequently explicitly requested committing and creating public repository `thai916/Whmcsmigrator`. Publication is permitted as an **experimental development preview**, not as the originally requested production-complete migration. Tag/release `0.1` must be marked as a prerelease and retain the incomplete-scope warning. See [release notes](RELEASE-0.1.md). Production acceptance criteria above remain unmet regardless of repository/release existence.
+
+The 0.2 connection-bug-fix release is likewise explicitly authorized as an experimental prerelease. Its optional TLS policies and timezone evidence do not resolve the production blockers above. See [0.2 notes](RELEASE-0.2.md).

@@ -48,6 +48,7 @@ final class Engine
             }
             if (in_array($run['mode'], ['reference_native', 'historical_native'], true) && isset($plan['destination_timezone']) && \FOSSBilling\Config::getProperty('i18n.timezone', 'UTC') !== $plan['destination_timezone']) throw new SafeException('Destination timezone changed after planning. Create a new reviewed plan.');
             $schema = json_decode($run['schema_json'], true, 128, JSON_THROW_ON_ERROR);
+            \Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($schema, array_keys($plan['tables']), $run['mode'] === 'dry_run' ? ($plan['target_mode'] ?? 'reference_native') : $run['mode']);
             $mapping = json_decode($run['mapping_json'], true, 128, JSON_THROW_ON_ERROR);
             $cursor = null;
             foreach (array_keys($plan['tables']) as $table) {
@@ -66,6 +67,7 @@ final class Engine
             }
             $source = $this->store->source((int) $run['source_id']);
             $options = $this->vault->open($source['credentials']);
+            \Box\Mod\Whmcsmigrator\Source\ConnectionOptions::assertPlan($options, $plan);
             $reader = new Reader($options);
             if (Store::json($reader->inspect()) !== Store::json($schema)) {
                 throw new SafeException('Source schema changed after preflight. Stop and review a new plan.');
@@ -161,6 +163,7 @@ final class Engine
             }
             $source = $this->store->source((int) $run['source_id']);
             $options = $this->vault->open($source['credentials']);
+            \Box\Mod\Whmcsmigrator\Source\ConnectionOptions::assertPlan($options, json_decode($run['plan_json'], true, 128, JSON_THROW_ON_ERROR));
             $reader = new Reader($options);
             $schema = json_decode($run['schema_json'], true, 128, JSON_THROW_ON_ERROR);
             if (Store::json($reader->inspect()) !== $run['schema_json']) {
@@ -168,6 +171,7 @@ final class Engine
             }
             $plan = json_decode($run['plan_json'], true, 128, JSON_THROW_ON_ERROR);
             if (in_array($run['mode'], ['reference_native', 'historical_native'], true) && ($plan['adapter_revision'] ?? 1) !== 2) throw new SafeException('Native adapter revision changed. A new reviewed run is required.');
+            \Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($schema, array_keys($plan['tables']), $run['mode'] === 'dry_run' ? ($plan['target_mode'] ?? 'reference_native') : $run['mode']);
             if (isset($plan['destination_timezone']) && \FOSSBilling\Config::getProperty('i18n.timezone', 'UTC') !== $plan['destination_timezone']) throw new SafeException('Destination timezone changed after planning. Retrying native history is blocked.');
             if ($this->store->verifyDestination()['fingerprint'] !== $plan['destination_fingerprint']) {
                 throw new SafeException('Destination schema changed; retries are blocked pending a new plan.');

@@ -23,7 +23,19 @@ rejects(fn () => ConnectionOptions::validate(array_replace($options, ['host' => 
 rejects(fn () => ConnectionOptions::validate($options + ['prefix' => 'tbl;DROP'] ), 'Identifier injection rejected');
 rejects(fn () => ConnectionOptions::validate($options + ['port' => 0]), 'Invalid port rejected');
 rejects(fn () => ConnectionOptions::validate($options + ['timeout' => 60]), 'Unbounded connection timeout rejected');
-rejects(fn () => ConnectionOptions::validate(array_replace($options, ['host' => 'db.example.com'])), 'Remote unencrypted connection rejected');
+expect(ConnectionOptions::validate(array_replace($options, ['host' => 'db.example.com']))['security_mode'] === 'verified_tls', 'Verified TLS is the default even when no security field is supplied');
+rejects(fn () => ConnectionOptions::validate($options + ['security_mode' => 'standard']), 'Standard mode requires explicit administrator risk acknowledgement');
+rejects(fn () => ConnectionOptions::validate($options + ['tls' => false]), 'Legacy tls=false form/API input cannot bypass explicit acknowledgement, even on loopback');
+expect(ConnectionOptions::validate($options + ['tls' => false], true)['security_mode'] === 'standard', 'Only trusted already-stored 0.1 local profiles retain legacy non-TLS compatibility');
+rejects(fn () => ConnectionOptions::validate($options + ['security_mode' => 'unverified_tls']), 'Unverified TLS requires explicit administrator risk acknowledgement');
+rejects(fn () => ConnectionOptions::validate($options + ['security_mode' => 'standard', 'security_acknowledged' => 'false']), 'String false cannot authorize a weaker security mode');
+$plain = ConnectionOptions::validate(array_replace($options, ['host' => 'db.example.com', 'security_mode' => 'standard', 'security_acknowledged' => true, 'tls_ca' => 'D:/not-required.pem']));
+expect($plain['tls'] === false && $plain['tls_ca'] === '', 'Explicit remote standard mode works without a readable CA path');
+expect(!isset(\Box\Mod\Whmcsmigrator\Source\ConnectionFactory::attributes($plain)[PDO::MYSQL_ATTR_SSL_CA]), 'Standard PDO attributes do not request TLS or require a TLS hostname/CA');
+$unverified = ConnectionOptions::validate($options + ['security_mode' => 'unverified_tls', 'security_acknowledged' => true]);
+$attrs = \Box\Mod\Whmcsmigrator\Source\ConnectionFactory::attributes($unverified);
+expect(isset($attrs[PDO::MYSQL_ATTR_SSL_CA]) && $attrs[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] === false, 'Unverified mode explicitly requests encryption while disabling only identity verification');
+rejects(fn () => ConnectionOptions::assertPlan($plain, ['source_security_mode' => 'verified_tls']), 'Existing run security cannot silently downgrade after profile retesting');
 rejects(fn () => ConnectionOptions::validate($options + ['tls' => true, 'tls_ca' => 'https://example.com/ca']), 'Remote certificate URL rejected');
 $tlsOptions = ConnectionOptions::validate(array_replace($options, ['host' => 'db.example.com', 'tls' => true]));
 expect(\Box\Mod\Whmcsmigrator\Source\CaBundle::readable($tlsOptions['tls_ca']), 'Remote TLS automatically uses a readable default CA bundle when no custom path is supplied');
@@ -38,6 +50,31 @@ expect(ConnectionOptions::validate($options + ['source_timezone' => 'Asia/Kolkat
 expect(\Box\Mod\Whmcsmigrator\Source\PublicIp::parse("8.8.8.8\n") === '8.8.8.8', 'IP response parser accepts a public IPv4 address');
 foreach (['127.0.0.1', '192.168.1.1', '::1', '<script>8.8.8.8</script>', 'not-an-ip'] as $invalidIp) {
     rejects(fn () => \Box\Mod\Whmcsmigrator\Source\PublicIp::parse($invalidIp), 'IP response parser rejects private/non-IPv4/non-IP response: ' . $invalidIp);
+}
+$dbZone = ['session_timezone' => 'America/Chicago', 'server_timezone' => 'SYSTEM', 'offset_seconds' => -21600];
+$zone = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::detect([], $dbZone);
+expect($zone['timezone'] === null && $zone['status'] === 'unverified' && $zone['database']['session_utc_offset'] === '-06:00', 'Database IANA timezone/offset is evidence only, not an assumed WHMCS timezone');
+$candidate = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::detect([['setting' => 'Timezone', 'value' => 'Asia/Kolkata']], $dbZone);
+expect($candidate['detected_timezone'] === 'Asia/Kolkata' && $candidate['timezone'] === null, 'Exact application-setting candidate is detected without falsely proving PHP runtime behavior');
+$confirmedZone = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::override($candidate, 'Asia/Kolkata');
+expect($confirmedZone['timezone'] === 'Asia/Kolkata' && $confirmedZone['confidence'] === 'administrator_verified', 'Explicitly verified application timezone takes priority over conflicting database timezone');
+rejects(fn () => \Box\Mod\Whmcsmigrator\Source\SourceTimezone::override($zone, '-06:00'), 'A database UTC offset cannot be promoted to a historical IANA timezone');
+$conflicting = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::detect([['setting' => 'Timezone', 'value' => 'UTC'], ['setting' => 'SystemTimezone', 'value' => 'America/Chicago']], $dbZone);
+expect($conflicting['detected_timezone'] === null && $conflicting['status'] === 'unverified', 'Conflicting application timezone candidates fail closed');
+$timestampSchema = ['tblclients' => ['suffix' => 'clients', 'columns' => ['datecreated' => ['type' => 'timestamp']]]];
+rejects(fn () => \Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($timestampSchema, ['tblclients'], 'reference_native'), 'Session-converted MySQL TIMESTAMP storage cannot masquerade as application-local DATETIME');
+\Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($timestampSchema, ['tblclients'], 'archive');
+expect(true, 'Unreviewed TIMESTAMP storage remains available for unchanged private archive preservation');
+foreach ([
+    ['SQLSTATE[HY000] [2002] certificate verify failed password=NEVER_EXPOSE', 'TLS certificate validation failed'],
+    ['SQLSTATE[HY000] [2026] SSL handshake failure', 'TLS negotiation failed'],
+    ['SQLSTATE[HY000] [2002] connection timed out', 'connection timed out'],
+    ['SQLSTATE[HY000] [2002] connection refused', 'port refused'],
+    ['SQLSTATE[HY000] [2002] php_network_getaddresses getaddrinfo failed', 'hostname could not be resolved'],
+    ['SQLSTATE[HY000] [2002] no route to host', 'host is unreachable'],
+] as [$driverText, $expected]) {
+    $message = \Box\Mod\Whmcsmigrator\Source\ConnectionDiagnostics::message(new RuntimeException($driverText));
+    expect(str_contains($message, $expected) && !str_contains($message, 'NEVER_EXPOSE'), 'Connection diagnostics classify ' . $expected . ' without leaking raw driver text');
 }
 GrantPolicy::verify(['GRANT USAGE ON *.* TO `r`@`localhost`', 'GRANT SELECT ON `whmcs_test`.* TO `r`@`localhost`'], 'whmcs_test');
 expect(true, 'Direct schema-scoped SELECT grant accepted');

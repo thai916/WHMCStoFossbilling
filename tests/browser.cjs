@@ -50,6 +50,7 @@ const historicalRun = {
     credit_publication: [{ source_key: "3", status: "failed", message: "Closing balance mismatch <script>window.XSS_EXECUTED=true</script>" }]
 };
 const requests = [];
+const testedModes = [];
 const server = http.createServer((request, response) => {
     const item = content[request.url];
     if (!item) { response.writeHead(404); response.end(); return; }
@@ -79,11 +80,23 @@ const server = http.createServer((request, response) => {
                     schemaUpgradeRequired = false; result = { upgraded: true }; break;
                 case "test_connection":
                     assert.equal(data.password, "synthetic-only");
-                    assert.equal(data.tls, "1");
-                    assert.ok(data.tls_ca.length > 0, "CA default is submitted without manually creating a path");
-                    assert.equal(data.source_timezone, "UTC");
-                    assert.equal(data.source_timezone_verified, true);
+                    testedModes.push(data.security_mode);
+                    if (data.security_mode === "verified_tls") assert.ok(data.tls_ca.length > 0);
+                    else {
+                        assert.equal(data.tls_ca, undefined, "Non-verified modes do not submit hidden CA inputs");
+                        assert.equal(data.security_acknowledged, true);
+                    }
+                    assert.equal(data.source_timezone, undefined, "Automatic timezone inspection does not submit an assumed timezone");
                     assert.equal(data.confirm_whmcs8, "", "Auto-detect is the default version policy");
+                    source.connection_status = { successful: true, security_mode: data.security_mode, tls_active: data.security_mode !== "standard", server_identity_verified: data.security_mode === "verified_tls", database: "synthetic", table_availability: { available: true, tables_found: 6 } };
+                    source.source_timezone = "";
+                    source.timezone_detection = { status: "unverified", timezone: null, detected_timezone: null, method: "database_observation_only", confidence: "insufficient", automatic_inconclusive: true, database: { session_timezone: "SYSTEM", server_timezone: "SYSTEM", session_utc_offset: "-06:00" }, php_runtime_timezone: "unavailable_via_database", warning: "MySQL offset does not prove the WHMCS application timezone." };
+                    result = source; break;
+                case "timezone_confirm":
+                    assert.equal(data.confirmation, "VERIFY SOURCE TIMEZONE");
+                    assert.equal(data.timezone, "Asia/Kolkata");
+                    source.source_timezone = data.timezone;
+                    source.timezone_detection = { ...source.timezone_detection, timezone: data.timezone, status: "verified", method: "administrator_verified_application_timezone", confidence: "administrator_verified" };
                     result = source; break;
                 case "public_ip":
                     assert.deepEqual(data, { confirmation: "LOOK UP PUBLIC IP" }, "IP lookup sends no database credentials");
@@ -120,8 +133,9 @@ const server = http.createServer((request, response) => {
         assert.equal(await page.locator("#wm-next").isDisabled(), true);
         assert.equal(requests.includes("test_connection"), false, "No connection runs on page load");
         assert.equal(requests.includes("public_ip"), false, "No external IP lookup runs on page load");
-        assert.equal(await page.locator("#wm-timezone").inputValue(), "UTC");
-        assert.equal(await page.locator("#wm-timezone-verified").isChecked(), false, "Default timezone is not silently verified");
+        assert.equal(await page.locator("#wm-timezone").inputValue(), "", "No UTC/application timezone is silently assumed");
+        assert.equal(await page.locator("#wm-timezone-override").isVisible(), false, "Override is offered only after an inconclusive detection");
+        assert.equal(await page.locator("#wm-security-mode").inputValue(), "verified_tls");
         assert.equal(await page.locator("#wm-version").inputValue(), "");
         assert.ok((await page.locator("#wm-ca").inputValue()).length > 0);
         assert.equal(await page.locator(".wm-logo").evaluate(img => img.complete && img.naturalWidth > 0), true, "Supplied PNG loads");
@@ -145,11 +159,31 @@ const server = http.createServer((request, response) => {
         await page.locator("#wm-host").fill("127.0.0.1");
         await page.locator("#wm-database").fill("synthetic");
         await page.locator("#wm-username").fill("reader");
-        await page.locator("#wm-password").fill("synthetic-only");
+        for (const mode of ["verified_tls", "unverified_tls", "standard"]) {
+            await page.locator("#wm-security-mode").selectOption(mode);
+            await page.locator("#wm-password").fill("synthetic-only");
+            assert.equal(await page.locator("#wm-tls-settings").isVisible(), mode === "verified_tls");
+            if (mode !== "verified_tls") {
+                const before = testedModes.length;
+                await page.getByRole("button", { name: "Test connection", exact: true }).click();
+                assert.equal(testedModes.length, before, "Weaker modes cannot be submitted without explicit confirmation");
+                await page.locator("#wm-security-acknowledged").check();
+            }
+            await page.getByRole("button", { name: "Test connection", exact: true }).click();
+            await page.waitForFunction(() => document.getElementById("wm-password").value === "");
+            assert.match(await page.locator("#wm-source-status").innerText(), /Connection successful/);
+            assert.equal(source.connection_status.security_mode, mode);
+        }
+        assert.deepEqual(testedModes, ["verified_tls", "unverified_tls", "standard"]);
+        assert.match(await page.locator("#wm-source-status").innerText(), /No — unencrypted connection/);
+        assert.match(await page.locator("#wm-timezone-evidence").innerText(), /Unverified/);
+        assert.match(await page.locator("#wm-timezone-evidence").innerText(), /-06:00/);
+        assert.equal(await page.locator("#wm-timezone").inputValue(), "", "MySQL offset never preselects an inferred IANA timezone");
+        await page.locator("#wm-timezone").selectOption("Asia/Kolkata");
         await page.locator("#wm-timezone-verified").check();
-        await page.getByRole("button", { name: "Test connection", exact: true }).click();
-        await page.waitForFunction(() => !document.getElementById("wm-next").disabled);
-        assert.equal(await page.locator("#wm-password").inputValue(), "");
+        await page.locator("#wm-timezone-save").click();
+        await page.waitForFunction(() => document.getElementById("wm-timezone-evidence").textContent.includes("administrator_verified"));
+        assert.equal(requests.filter(method => method === "test_connection").length, 3, "Timezone override saves without reconnecting or resubmitting a password");
         await page.locator("#wm-next").click();
         await page.locator("#wm-field-search").fill("password");
         assert.match(await page.locator("#wm-fields").innerText(), /Excluded sensitive field/);
@@ -184,7 +218,7 @@ const server = http.createServer((request, response) => {
         await page.screenshot({ path: path.join(artifacts, "mobile.png"), fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile connection page has no horizontal overflow");
         assert.deepEqual(errors, [], "No browser JavaScript errors");
-        console.log("PASS: synthetic browser wizard, supplied icon, default CA, timezone/version dropdowns, explicit public-IP lookup/copy/failure, confirmed schema upgrade, historical-target preview, explicit resume, legacy-reference search, financial discrepancies/missing values, diagnostic/archive XSS protection, no browser storage, desktop/mobile layout");
+        console.log("PASS: synthetic browser wizard, all three explicitly selected security modes, risk confirmations, conditional CA fields, automatic timezone evidence/verified override, connection diagnostics, explicit public-IP controls, schema upgrade, historical preview/resume, legacy search, financial displays, XSS protection, no browser storage, desktop/mobile layout");
         const livePage = await browser.newPage();
         await livePage.goto("http://fossbill.test/admin/whmcsmigrator");
         await livePage.waitForLoadState("networkidle");

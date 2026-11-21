@@ -41,6 +41,9 @@ Security/Sensitive.php
 Security/Vault.php
 Source/Catalog.php
 Source/ConnectionOptions.php
+Source/ConnectionFactory.php
+Source/ConnectionDiagnostics.php
+Source/SourceTimezone.php
 Source/CaBundle.php
 Source/PublicIp.php
 Source/GrantPolicy.php
@@ -55,6 +58,7 @@ templates/admin/mod_whmcsmigrator_settings.html.twig
 tests/bootstrap.php
 tests/browser.cjs
 tests/integration.php
+tests/connection.php
 tests/integrity.php
 tests/render.php
 tests/security.php
@@ -66,8 +70,10 @@ docs/OPERATIONS.md
 docs/REMAINING-WORK.md
 docs/TESTING.md
 docs/RELEASE-0.1.md
+docs/RELEASE-0.2.md
+docs/CONNECTIONS.md
 ```
 
 Private local-only artifacts beneath `.local/` include the original core SHA-256 baseline, integrity/test results, browser screenshots/profile, and development-only Playwright/npm installation/cache. They are ignored by Git, are not part of the deliverable, and must not be deployed or published.
 
-Integration tests create and clean up only randomly named disposable local databases and a SELECT-only fixture account. No real WHMCS connection has been made. Actual application browser requests can create administrator-approved FOSSBilling cache/log/session runtime state; those are not core source edits.
+Integration tests create and clean up only randomly named disposable local databases/accounts; the separate connection suite initializes and removes its own private fixture-server datadir. No live WHMCS login, extraction or import was used for these suites. Credential-free network/TLS diagnostics were performed separately at administrator request. Actual application browser requests can create administrator-approved FOSSBilling cache/log/session runtime state; those are not core source edits.

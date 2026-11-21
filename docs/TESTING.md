@@ -25,6 +25,36 @@ The integration test:
 
 It needs a local DBA account allowed to create disposable databases/users. If those permissions are not available, it must fail; do not substitute production WHMCS credentials.
 
+## Disposable TLS / connection-policy server
+
+```powershell
+$env:WM_MYSQLD = 'D:\Laragon\bin\mysql\mysql8.0.31\bin\mysqld.exe'
+& $php modules/Whmcsmigrator/tests/connection.php --disposable-server
+```
+
+This separate suite initializes its **own** MySQL 8 datadir on a randomly allocated
+loopback port below `.local/`. It creates a temporary CA/key/certificate with an IP
+SAN, starts only that fixture process with its own TLS/query-log settings, then
+stops it and removes its exact fixture tree. It never reads application DBA
+credentials, changes the installed server's configuration or accepts live WHMCS
+connection details.
+
+Actual PDO tests cover:
+
+- Standard mode with an unreadable/irrelevant CA override and no TLS negotiated.
+- Verified TLS with a valid custom CA/IP identity.
+- Encrypted unverified TLS despite a server CA absent from the public trust store.
+- Rejected untrusted CA and trusted-CA/hostname mismatch, without downgrading.
+- Authentication, missing database, missing SELECT and overprivileged-account errors.
+- Timezone-candidate/offset SELECTs without selecting unrelated secret settings.
+- Unchanged source contents and a MySQL general-query-log audit of source-reader
+  statements: SELECT/SHOW safety metadata, READ ONLY start and rollback only.
+- Fixture restart with TLS disabled: both TLS modes refuse before sending
+  credentials, while explicitly selected standard mode still works.
+
+The private fixture's DBA creates the synthetic schema/users and shuts down only
+that fixture server. Those setup/cleanup operations are not source-reader queries.
+
 ## Browser harness
 
 Node/Playwright may be installed as development-only tools under `.local/`, with its npm cache also under `.local/`. No root application dependencies are modified.
@@ -37,7 +67,7 @@ $env:WM_CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
 node modules/Whmcsmigrator/tests/browser.cjs
 ```
 
-The harness uses a synthetic API, the real extension Twig template/JS/CSS, the installed admin stylesheets and a minimal test-only layout. It verifies wizard flow, supplied PNG rendering, default CA submission, version/timezone dropdowns and explicit verification, public-IP lookup/copy/failed-refresh behavior, field filtering, disabled sensitive tables, historical-target preview/start separation, schema-upgrade confirmation/cancellation, exact legacy-reference search, financial discrepancies and missing-native-value displays, safe archive/diagnostic rendering, no local/session storage and desktop/mobile layout. IP/schema-upgrade/financial responses in this harness are synthetic, not real admin writes or external lookups. Clipboard wiring is tested without modifying the user's clipboard.
+The harness uses a synthetic API, the real extension Twig template/JS/CSS, the installed admin stylesheets and a minimal test-only layout. It verifies all three explicitly selected security modes, required risk confirmations, conditional CA fields, actual-state success display, no default UTC assumption, automatic timezone evidence and verified override without password resubmission. It also covers the existing IP controls, mapping/exclusions, preview/start separation, schema-upgrade confirmation, legacy search, financial discrepancies/missing values, safe text rendering, no browser storage and desktop/mobile layout. API responses are synthetic, not real admin writes, MySQL handshakes or external lookups. Clipboard wiring does not change the user's clipboard.
 
 It also checks that the actual local admin page requires login when unauthenticated.
 
@@ -64,8 +94,8 @@ It also checks that the actual local admin page requires login when unauthentica
 
 ## Not established
 
-- No live WHMCS connection or production migration was tested.
-- No successful verified remote-TLS connection, real firewall outage, server restart, process-kill timeout, production-volume load or MariaDB compatibility test was performed.
+- No credentialed live WHMCS database connection or production migration was tested. Separate administrator-requested TCP/TLS diagnostics sent no username, password or SQL.
+- No successful verified real-provider remote-TLS connection, real firewall outage, process-kill timeout, production-volume load or MariaDB compatibility test was performed. Disposable local server TLS/plaintext connections and fixture-only server restart are tested.
 - Supported native historical adapters and extracted-baseline assessments are tested, but **active/suspended/pending services, domains, unpaid/draft invoices, complete configurable options, arbitrary allocations, outstanding debt and live cutover reconciliation remain unverified or blocked**.
 - No real attachment transfer.
 - No proof of a global automation-isolation mechanism, arbitrary third-party hook safety or concurrent out-of-band destination writer safety. The historical financial mode explicitly requires an otherwise idle private destination.
@@ -96,9 +126,10 @@ Without a pre-development baseline, the script refuses to claim unchanged files.
 ## Latest local verification — 2026-11-21
 
 - PHP syntax checks and JavaScript syntax checks passed.
-- Unit: 71 assertions; endpoint security: 23; render/module discovery: 9; disposable MySQL integration: 167.
+- Version 0.2: unit 93 assertions; endpoint security 25; render/module discovery 10; disposable migration integration 180; disposable TLS/connection server 15.
+- All 45 PHP files and both JavaScript files pass syntax checks. Connection policy, actual encryption/identity, query-log read-only enforcement, timezone evidence/override snapshots, client DATETIME conversion/date-only preservation and existing migration regressions pass.
 - Expanded synthetic browser tests passed, as did the actual unauthenticated local login gate. Authenticated real-admin end-to-end verification remains pending.
 - Integrity checked 8,100 baseline files but **did not pass**: `config.php` differs and `config.old.php` exists outside the extension. Both were left untouched; their origin is not established by the checker. Approved cache/log changes are separately listed in `.local/integrity-result.json`. Do not describe this result as zero external changes or reset the baseline to conceal the differences.
 - Bundled CA certificates parse as real X.509 certificates, and the downloaded file SHA-256 matches the HTTPS upstream checksum. A separate explicitly requested CLI public-IP lookup succeeded over verified HTTPS; this does not prove remote MySQL TLS compatibility.
 - Local HTTP checks: supplied public icon returns 200/image/png; direct manifest, CA bundle and private baseline requests return 403.
-- No live WHMCS connection/import was performed. Publication is an explicitly authorized experimental prerelease, not production acceptance.
+- No live WHMCS login/import was performed. Publication is an explicitly authorized experimental prerelease, not production acceptance.

@@ -13,31 +13,17 @@ final class Reader
     private \PDO $pdo;
     private bool $mysql;
     private bool $repeatableReads;
+    private readonly array $options;
+    private array $connection;
 
-    public function __construct(#[\SensitiveParameter] private readonly array $options)
+    public function __construct(#[\SensitiveParameter] array $options)
     {
-        $attributes = [
-            \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
-            \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
-            \PDO::ATTR_EMULATE_PREPARES => false,
-            \PDO::ATTR_TIMEOUT => $options['timeout'],
-            \PDO::MYSQL_ATTR_MULTI_STATEMENTS => false,
-            \PDO::MYSQL_ATTR_LOCAL_INFILE => false,
-        ];
-        if ($options['tls']) {
-            $attributes[\PDO::MYSQL_ATTR_SSL_CA] = $options['tls_ca'];
-            $attributes[\PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] = true;
-        }
-        $this->pdo = new \PDO(sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $options['host'], $options['port'], $options['database']), $options['username'], $options['password'], $attributes);
+        $this->options = $options = ConnectionOptions::validate($options, true);
+        $this->pdo = ConnectionFactory::connect($options);
+        $this->connection = ConnectionFactory::status($this->pdo, $options['security_mode']) + ['database' => $options['database']];
         $version = (string) $this->pdo->query('SELECT VERSION()')->fetchColumn();
         $this->mysql = stripos($version, 'MariaDB') === false;
         GrantPolicy::verify($this->pdo->query('SHOW GRANTS FOR CURRENT_USER')->fetchAll(\PDO::FETCH_COLUMN), $options['database']);
-        if ($options['tls']) {
-            $cipher = $this->pdo->query("SHOW SESSION STATUS LIKE 'Ssl_cipher'")->fetch();
-            if (empty($cipher['Value'])) {
-                throw new SafeException('The source connection did not negotiate TLS. Refusing access.');
-            }
-        }
         try {
             $isolation = $this->pdo->query('SELECT @@SESSION.transaction_isolation')->fetchColumn();
         } catch (\PDOException $error) {
@@ -54,6 +40,11 @@ final class Reader
         // Session defaults do not reflect START TRANSACTION READ ONLY. Inspect the current transaction instead.
         // On MySQL, performance_schema visibility is not guaranteed to SELECT-only users.
         // Successful server acceptance of READ ONLY plus verified grants is the enforced protection.
+    }
+
+    public function connectionStatus(): array
+    {
+        return $this->connection;
     }
 
     public function __destruct()
@@ -136,6 +127,20 @@ final class Reader
         $version = $s->fetchColumn();
 
         return is_string($version) && preg_match('/\A\d+\.\d+(?:\.\d+)?(?:[-+.\w]*)\z/D', $version) ? $version : null;
+    }
+
+    public function timezone(array $schema): array
+    {
+        $database = $this->pdo->query('SELECT @@session.time_zone AS session_timezone, @@global.time_zone AS server_timezone, NOW() AS server_now, UTC_TIMESTAMP() AS utc_now, TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS offset_seconds')->fetch();
+        $settings = [];
+        $table = $this->options['prefix'] . 'configuration';
+        if (isset($schema[$table]['columns']['setting'], $schema[$table]['columns']['value'])) {
+            $query = $this->pdo->prepare('SELECT ' . $this->hint() . ' `setting`,CASE WHEN OCTET_LENGTH(`value`)<=128 THEN `value` ELSE NULL END AS `value` FROM ' . self::identifier($table) . ' WHERE BINARY `setting` IN (' . implode(',', array_fill(0, count(SourceTimezone::SETTINGS), '?')) . ') LIMIT 17');
+            $query->execute(SourceTimezone::SETTINGS);
+            $settings = $query->fetchAll();
+        }
+
+        return SourceTimezone::detect($settings, $database);
     }
 
     public function bounds(string $name, array $definition): array

@@ -137,12 +137,20 @@ try {
     $nativeModule = new \FOSSBilling\Module('whmcsmigrator');
     $nativeModule->setDi($di);
     expect($nativeModule->install() && $service->store()->schemaReady(), 'Native FOSSBilling module installer creates the extension schema in the disposable destination');
-    $options = ['host' => $fixtureHost, 'port' => $db['port'] ?? 3306, 'database' => $sourceDb, 'username' => $user, 'password' => $password, 'prefix' => 'tbl', 'timeout' => 3, 'tls' => false, 'source_timezone' => 'UTC'];
+    $options = ['host' => $fixtureHost, 'port' => $db['port'] ?? 3306, 'database' => $sourceDb, 'username' => $user, 'password' => $password, 'prefix' => 'tbl', 'timeout' => 3, 'security_mode' => 'standard', 'security_acknowledged' => true, 'source_timezone' => 'UTC'];
     $profile = $service->testConnection($options);
     expect($profile['version'] === '8.10.1', 'Source WHMCS version detected without reading other settings');
     expect($profile['schema']['tblunknownmodule']['classification'] === 'requires_review', 'Unknown module tables require manual security review');
     expect($profile['schema']['tblcustomfieldsvalues']['classification'] === 'requires_review', 'Opaque custom-field values require review');
     expect($profile['schema']['tblconfiguration']['classification'] === 'excluded_sensitive', 'Operational configuration excluded');
+    expect($profile['connection_status']['successful'] && $profile['connection_status']['security_mode'] === 'standard' && !$profile['connection_status']['tls_active'] && !$profile['connection_status']['server_identity_verified'], 'Successful test reports real security/encryption/identity state without claiming TLS for standard mode');
+    expect($profile['connection_status']['database'] === $sourceDb && $profile['connection_status']['table_availability']['available'] && !str_contains(json_encode($profile), $password), 'Connection response includes database/table availability but never the password');
+    $unknownZone = $service->testConnection(array_replace($options, ['source_timezone' => '']));
+    expect($unknownZone['source_timezone'] === '' && $unknownZone['timezone_detection']['status'] === 'unverified' && $unknownZone['timezone_detection']['database']['session_utc_offset'] !== null, 'Real MySQL timezone SELECT returns offset evidence without assuming it is the WHMCS timezone');
+    $profile = $service->confirmSourceTimezone($profile['source_id'], 'UTC');
+    expect($profile['source_timezone'] === 'UTC' && $profile['timezone_detection']['confidence'] === 'administrator_verified', 'Optional verified override updates only the encrypted extension profile');
+    rejects(fn () => $service->confirmSourceTimezone($profile['source_id'], '-06:00'), 'Database offset cannot authorize timezone-sensitive imports as a fake IANA region');
+    expect($sourceDigest() === $before, 'Connection testing and timezone confirmation never modify synthetic source records');
     foreach ([
         ['password' => 'incorrect-fixture-password'],
         ['database' => 'wm_test_missing_' . $token],
@@ -151,7 +159,7 @@ try {
         try {
             $service->testConnection(array_replace($options, $invalid));
             expect(false, 'Invalid fixture connection must fail');
-        } catch (PDOException $error) {
+        } catch (PDOException|SafeException $error) {
             expect(!str_contains(\Box\Mod\Whmcsmigrator\Security\Sensitive::error($error), 'incorrect-fixture-password'), 'Connection failure is safely classified without credentials');
         }
     }
@@ -168,8 +176,22 @@ try {
         }
     }
     $runInput = ['source_id' => $profile['source_id'], 'tables' => $selection];
+    $service->testConnection(array_replace($options, ['source_timezone' => '']));
+    try {
+        $service->createRun($runInput + ['mode' => 'reference_native', 'confirmation' => 'PRESERVE HISTORY', 'backup_verified' => true, 'backup_reference' => 'disposable timezone fixture', 'accept_limitations' => true], 1);
+        expect(false, 'Unverified source timezone must block native event authorization');
+    } catch (SafeException $error) {
+        expect(str_contains($error->getMessage(), 'timezone is Unverified'), 'Unverified automatic timezone evidence blocks native event authorization before any business-record publication');
+    }
+    expect((int) $service->store()->one('SELECT COUNT(*) AS n FROM client')['n'] === 0 && (int) $service->store()->one('SELECT COUNT(*) AS n FROM invoice')['n'] === 0, 'All connection/timezone tests and failed preflight leave destination business tables empty');
+    $service->confirmSourceTimezone($profile['source_id'], 'UTC');
     rejects(fn () => $service->createRun($runInput + ['mode' => 'archive'], 1), 'Destination writes require backup and explicit confirmation');
     $dry = $service->createRun($runInput + ['mode' => 'dry_run'], 1);
+    $dryPlan = json_decode($service->store()->run($dry['id'])['plan_json'], true, 128, JSON_THROW_ON_ERROR);
+    expect($dryPlan['source_security_mode'] === 'standard' && $dryPlan['source_timezone'] === 'UTC' && $dryPlan['source_timezone_evidence']['confidence'] === 'administrator_verified', 'Run plans freeze source security mode and verified timezone evidence');
+    $service->confirmSourceTimezone($profile['source_id'], 'Asia/Kolkata');
+    expect(json_decode($service->store()->run($dry['id'])['plan_json'], true, 128, JSON_THROW_ON_ERROR)['source_timezone'] === 'UTC', 'A later profile timezone override cannot rewrite an already-authorized run snapshot');
+    $service->confirmSourceTimezone($profile['source_id'], 'UTC');
     $service->control($dry['id'], 'resume');
     $batches = 0;
     do {
@@ -180,6 +202,9 @@ try {
     } while ($result['status'] === 'running');
     expect($result['status'] === 'preview_finished', 'Dry run finishes without claiming insertion');
     $store = $service->store();
+    $clientTimestamp = ['id' => 999, 'email' => 'timestamp-fixture@example.invalid', 'datecreated' => '2010-01-01 05:30:00'];
+    $clientRules = \Box\Mod\Whmcsmigrator\Mapping\Profile::defaults($profile['schema'])['fields']['tblclients'];
+    rejects(fn () => (new \Box\Mod\Whmcsmigrator\Destination\NativeWriter($store, $profile['source_id'], 'tbl'))->validateClientPreview($clientTimestamp, $clientRules), 'Client DATETIME registrations cannot silently assume UTC when the source timezone is unresolved');
     expect((int) $store->one('SELECT COUNT(*) AS n FROM client')['n'] === 0, 'Dry run creates no destination clients');
     expect((int) $store->one('SELECT COUNT(*) AS n FROM whmcsmigrator_archive')['n'] === 0, 'Dry run creates no historical archive records');
     $advancedPreview = $service->createRun($runInput + ['mode' => 'dry_run', 'target_mode' => 'historical_native'], 1);
@@ -213,6 +238,18 @@ try {
     expect($status['status'] === 'partial_archived', 'Run reports partial archival, never a complete billing migration');
     expect((int) $store->one('SELECT COUNT(*) AS n FROM client')['n'] === 3, 'Clients imported natively');
     expect($store->one('SELECT created_at FROM client WHERE aid=?', ['whmcs:' . $profile['source_id'] . ':1'])['created_at'] === '2004-02-29 00:00:00', 'Original client registration date survives persistence');
+    $timestampRow = $clientTimestamp + ['firstname' => 'Zone', 'lastname' => 'Fixture', 'currency' => 1, 'groupid' => 0, 'status' => 'Closed', 'notes' => '', 'credit' => '0.00'];
+    foreach (['2010-01-01 05:30:00', '2010-01-01'] as $registration) {
+        $timestampRow['datecreated'] = $registration;
+        $store->pdo->beginTransaction();
+        try {
+            $writer = new \Box\Mod\Whmcsmigrator\Destination\NativeWriter($store, $profile['source_id'], 'tbl', 'Asia/Kolkata');
+            $writer->import('clients', $timestampRow, $clientRules, hash('sha256', Store::json($timestampRow)), $run['id']);
+            expect($store->one('SELECT created_at FROM client WHERE aid=?', ['whmcs:' . $profile['source_id'] . ':999'])['created_at'] === '2010-01-01 00:00:00', 'Native client adapter correctly handles ' . $registration . ' as ' . (strlen($registration) === 10 ? 'an unchanged calendar date' : 'a converted application timestamp'));
+        } finally {
+            $store->pdo->rollBack(); // Only these extra disposable adapter assertions.
+        }
+    }
     expect((int) $store->one("SELECT COUNT(*) AS n FROM product WHERE active=0 AND hidden=1 AND setup='manual'")['n'] === 4, 'Products and add-ons remain disabled, hidden and manually provisioned');
     $productId = $store->one("SELECT destination_id FROM whmcsmigrator_identity WHERE source_id=? AND table_name='tblproducts' AND source_key='1' AND destination_entity='product'", [$profile['source_id']])['destination_id'];
     $product = $store->one('SELECT * FROM product WHERE id=?', [$productId]);

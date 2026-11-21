@@ -96,13 +96,51 @@
             throw new Error("Clipboard access is unavailable. Select and copy the displayed IP manually.");
         }
     }));
+    function securityControls() {
+        const mode = $("security-mode").value, verified = mode === "verified_tls";
+        $("tls-settings").classList.toggle("d-none", !verified);
+        $("ca").disabled = !verified;
+        $("security-risk").classList.toggle("d-none", verified);
+        $("security-acknowledged").checked = false;
+        $("security-acknowledged").required = !verified;
+        $("security-warning").textContent = mode === "unverified_tls"
+            ? "Encryption is required, but the server identity is NOT authenticated. An attacker could impersonate the database server and read credentials/customer data. Prefer verified TLS or a trusted tunnel."
+            : "No TLS is requested. Credentials and customer data may travel unencrypted. Use only after explicitly accepting this risk or through a separately secured trusted tunnel.";
+    }
+    $("security-mode").addEventListener("change", securityControls);
+    securityControls();
     function useSource(data) {
         source = data;
         profile = structuredClone(data.profile);
         defaultProfile = structuredClone(data.profile);
         counts.clear();
         data.analysis.forEach(row => counts.set(row.table_name, Number(row.expected)));
-        $("source-status").textContent = `SELECT-only connection verified: ${data.label}. WHMCS version: ${data.version || "manually confirmed 8.x"}. Source timezone: ${data.source_timezone || "unresolved"}. Counts require separate analysis.`;
+        const connection = data.connection_status;
+        const modeNames = { verified_tls: "Verified TLS", unverified_tls: "TLS without certificate verification", standard: "Standard MySQL (no TLS requested)" };
+        $("source-status").replaceChildren(element("h4", connection?.successful ? "Connection successful" : "Previously tested source — retest for current connection diagnostics"), element("p", `SELECT-only grants checked · ${data.label} · WHMCS ${data.version || "manually confirmed 8.x"} · Last tested ${data.tested_at || "unknown"} UTC`));
+        if (connection) $("source-status").append(dataTable(["Property", "Result"], [
+            ["Selected security", modeNames[connection.security_mode] || connection.security_mode],
+            ["TLS encryption active", connection.tls_active ? "Yes" : "No — unencrypted connection"],
+            ["Server identity verified", connection.server_identity_verified ? "Yes" : "No"],
+            ["Database", connection.database],
+            ["WHMCS tables", connection.table_availability?.available ? `Required tables available · ${connection.table_availability.tables_found} tables inspected` : "Not verified"]
+        ]));
+        const zone = data.timezone_detection;
+        $("timezone-evidence").replaceChildren(element("h4", `Source timezone: ${zone?.status === "verified" ? "Verified" : "Unverified"}`));
+        if (zone) {
+            $("timezone-evidence").append(dataTable(["Evidence", "Value"], [
+                ["WHMCS application timezone", zone.timezone || "Not reliably established"],
+                ["Detected application-setting candidate", zone.detected_timezone || "None / conflicting"],
+                ["Detection method", zone.method], ["Confidence", zone.confidence],
+                ["MySQL session timezone", zone.database?.session_timezone],
+                ["MySQL server timezone", zone.database?.server_timezone],
+                ["Observed MySQL session UTC offset", zone.database?.session_utc_offset],
+                ["Remote PHP runtime timezone", zone.php_runtime_timezone]
+            ]), element("p", zone.warning, "text-warning"));
+        } else $("timezone-evidence").append(element("p", "Retest this source to inspect timezone evidence. No timezone is inferred from this FOSSBilling installation."));
+        $("timezone-override").classList.toggle("d-none", !zone?.automatic_inconclusive);
+        $("timezone").value = zone?.timezone || zone?.detected_timezone || "";
+        $("timezone-verified").checked = false;
         $("next").disabled = false;
         root.querySelector('[data-step="mapping"]').disabled = false;
         root.querySelector('[data-step="analysis"]').disabled = false;
@@ -110,15 +148,20 @@
         renderTables();
     }
     $("connection").addEventListener("submit", handle(async () => {
-        notice("Verifying source privileges, TLS and schema. No import is running.");
+        notice("Testing the selected source security mode, SELECT-only privileges, schema and timezone evidence. No import is running.");
         const values = Object.fromEntries(new FormData($("connection")));
-        values.source_timezone_verified = $("timezone-verified").checked;
+        values.security_acknowledged = $("security-acknowledged").checked;
         const result = await api("test_connection", values);
         $("password").value = "";
         delete values.password;
         useSource(result);
         await dashboard();
         notice("Connection verified. Review every mapping and excluded table before proceeding.");
+    }));
+    $("timezone-override").addEventListener("submit", handle(async () => {
+        if (!source || !$("timezone-verified").checked) throw new Error("Verify the WHMCS application timezone before saving an override.");
+        useSource(await api("timezone_confirm", { source_id: source.source_id, timezone: $("timezone").value, confirmation: "VERIFY SOURCE TIMEZONE" }));
+        notice("Verified source timezone saved in this extension only. Existing run snapshots were not changed.");
     }));
     $("sources").addEventListener("change", handle(async () => {
         if ($("sources").value) useSource(await api("mapping_get", { source_id: Number($("sources").value) }));

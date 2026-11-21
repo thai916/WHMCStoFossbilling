@@ -8,7 +8,7 @@
   "author_url": "https://github.com/thai916",
   "homepage_url": "https://github.com/thai916/Whmcsmigrator",
   "license": "Apache-2.0",
-  "version": "0.1",
+  "version": "0.2",
   "minimum_fossbilling_version": "0.8.9",
   "maximum_fossbilling_version": "0.8.9"
 }

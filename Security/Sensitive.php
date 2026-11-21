@@ -23,15 +23,7 @@ final class Sensitive
             return $error->getMessage();
         }
         if ($error instanceof \PDOException) {
-            return match ((int) ($error->errorInfo[1] ?? $error->getCode())) {
-                1045 => 'Database authentication failed. Check the dedicated account credentials.',
-                1049 => 'The selected database does not exist or is inaccessible.',
-                1044, 1142 => 'Database privileges are insufficient.',
-                2002, 2003 => 'Database connection failed. Check hostname, port and firewall allowlisting.',
-                2006, 2013 => 'Database connection was interrupted. This operation may be retried.',
-                2026 => 'TLS negotiation failed. Check the CA certificate and server identity.',
-                default => 'Database operation failed. Credentials and SQL parameters have been withheld.',
-            };
+            return \Box\Mod\Whmcsmigrator\Source\ConnectionDiagnostics::message($error);
         }
 
         return 'Operation failed safely. No source values are included in this diagnostic.';

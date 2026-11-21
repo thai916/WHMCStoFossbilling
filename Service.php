@@ -108,6 +108,14 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         if ($version === null && ($input['confirm_whmcs8'] ?? '') !== 'WHMCS 8.x') {
             throw new SafeException('Source version could not be detected. Verify WHMCS 8.x manually and provide the explicit version confirmation.');
         }
+        $options['timezone_detection'] = $reader->timezone($schema);
+        if (($options['source_timezone'] ?? '') !== '') {
+            $options['timezone_detection'] = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::override($options['timezone_detection'], $options['source_timezone']);
+        }
+        $options['source_timezone'] = $options['timezone_detection']['timezone'] ?? '';
+        $options['connection_status'] = $reader->connectionStatus() + [
+            'table_availability' => ['available' => true, 'tables_found' => count($schema), 'required_tables' => ['clients', 'products', 'hosting', 'invoices', 'invoiceitems', 'accounts']],
+        ];
         $store = $this->store();
         $store->verifyDestination();
         $fingerprint = hash('sha256', Store::json([$options['host'], $options['port'], $options['database'], $options['prefix']]));
@@ -133,16 +141,39 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         $row = $this->store()->source($source);
         $schema = json_decode($row['schema_json'], true, 128, JSON_THROW_ON_ERROR);
         $profile = json_decode($row['mapping_json'], true, 128, JSON_THROW_ON_ERROR);
+        $options = $this->vault()->open($row['credentials']);
 
         return [
             'source_id' => $source, 'label' => $row['label'], 'version' => $row['source_version'],
-            'source_timezone' => $this->vault()->open($row['credentials'])['source_timezone'] ?? '',
+            'source_timezone' => $options['source_timezone'] ?? '',
+            'timezone_detection' => $options['timezone_detection'] ?? null,
+            'connection_status' => $options['connection_status'] ?? null,
+            'tested_at' => $row['tested_at'],
             'schema' => $schema, 'profile' => $profile, 'fields' => Profile::describe($schema, $profile),
             'native_client_targets' => array_values(Profile::CLIENT_FIELDS),
             'native_entities' => NativeWriter::ENTITIES,
             'analysis' => $this->store()->all('SELECT table_name,expected,maximum,analyzed_at FROM whmcsmigrator_analysis WHERE source_id=?', [$source]),
             'blockers' => Planner::BLOCKERS,
         ];
+    }
+
+    public function confirmSourceTimezone(int $source, string $timezone): array
+    {
+        $store = $this->store();
+        $lock = 'whmcsmigrator-source-' . $source;
+        $store->lock($lock);
+        try {
+            $row = $store->source($source);
+            $options = $this->vault()->open($row['credentials']);
+            if (!isset($options['timezone_detection'])) throw new SafeException('Retest this saved source to collect automatic timezone evidence before confirming an override.');
+            $options['timezone_detection'] = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::override($options['timezone_detection'], $timezone);
+            $options['source_timezone'] = $timezone;
+            $store->execute('UPDATE whmcsmigrator_source SET credentials=? WHERE id=?', [$this->vault()->seal($options), $source]);
+
+            return $this->mapping($source);
+        } finally {
+            $store->unlock($lock);
+        }
     }
 
     public function saveMapping(int $source, array $profile): array
@@ -199,13 +230,27 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         if ($mode === 'reference_native' && Config::getProperty('i18n.timezone', 'UTC') !== 'UTC') {
             foreach ($selection as $name) {
                 if (in_array($schema[$name]['suffix'], ['tickets', 'ticketreplies', 'ticketnotes', 'emails'], true)) throw new SafeException('Native history timestamp adapters currently require a UTC-configured destination. No global timezone was changed.');
+                if ($schema[$name]['suffix'] === 'clients' && preg_match('/\\A(?:datetime|timestamp)\\b/i', $schema[$name]['columns']['datecreated']['type'] ?? '')) throw new SafeException('Native client registration timestamps require a UTC-configured destination. Date-only source registrations are unchanged.');
             }
         }
         $store = $this->store();
         $plan = Planner::build($store, (int) $source['id'], $schema, array_values(array_unique($selection)));
+        \Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($schema, array_keys($plan['tables']), $target);
         $plan['destination_fingerprint'] = $store->verifyDestination()['fingerprint'];
         $options = $this->vault()->open($source['credentials']);
         $plan['source_timezone'] = $options['source_timezone'] ?? '';
+        if ($mode !== 'dry_run' && $target !== 'archive' && $plan['source_timezone'] === '') {
+            foreach (array_keys($plan['tables']) as $name) {
+                $suffix = $schema[$name]['suffix'];
+                $clientTimestamp = $suffix === 'clients' && preg_match('/\\A(?:datetime|timestamp)\\b/i', $schema[$name]['columns']['datecreated']['type'] ?? '');
+                if ($clientTimestamp || in_array($suffix, ['tickets', 'ticketreplies', 'ticketnotes', 'emails'], true)
+                    || ($target === 'historical_native' && in_array($suffix, ['accounts', 'credit', 'invoices', 'hosting'], true))) {
+                    throw new SafeException('WHMCS application timezone is Unverified. Review automatic evidence and confirm an exact application timezone before authorizing timezone-sensitive native records. Archive mode remains available.');
+                }
+            }
+        }
+        $plan['source_timezone_evidence'] = $options['timezone_detection'] ?? null;
+        $plan['source_security_mode'] = ConnectionOptions::validate($options, true)['security_mode'];
         $plan['source_prefix'] = $options['prefix'];
         $plan['adapter_revision'] = 2;
         $plan['target_mode'] = $target;

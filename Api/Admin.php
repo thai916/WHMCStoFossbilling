@@ -83,6 +83,15 @@ final class Admin extends \FOSSBilling\Api\AbstractApi
         return $this->guarded('configure', fn (): array => $this->getService()->mapping((int) ($data['source_id'] ?? 0)));
     }
 
+    public function timezone_confirm(array $data): array
+    {
+        return $this->guarded('configure', function () use ($data): array {
+            if (($data['confirmation'] ?? '') !== 'VERIFY SOURCE TIMEZONE') throw new SafeException('Explicitly verify the WHMCS application timezone before applying an override.');
+
+            return $this->getService()->confirmSourceTimezone((int) ($data['source_id'] ?? 0), (string) ($data['timezone'] ?? ''));
+        });
+    }
+
     public function mapping_save(array $data): array
     {
         return $this->guarded('configure', fn (): array => $this->getService()->saveMapping((int) ($data['source_id'] ?? 0), $data['profile'] ?? []));

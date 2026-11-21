@@ -24,7 +24,8 @@ if (in_array('--stdout', $argv, true)) {
     expect(str_contains($html, 'not a complete billing migration'), 'Incomplete-release warning is visible');
     expect(str_contains($html, 'Test connection') && str_contains($html, 'PRESERVE HISTORY'), 'Connection and explicit authorization controls render');
     expect(str_contains($html, 'FOSSB to WHMCS Migrator') && str_contains($html, '/icon.png') && str_contains($html, 'WHMCS 8.x → FOSSBilling 0.8.9'), 'Requested branding/icon retain the actual migration direction');
-    expect(str_contains($html, 'Auto-detect (recommended)') && str_contains($html, 'value="UTC" selected') && str_contains($html, 'wm-timezone-verified'), 'Version/timezone dropdowns render safe defaults with separate timezone verification');
+    expect(str_contains($html, 'Auto-detect (recommended)') && !str_contains($html, 'value="UTC" selected') && str_contains($html, 'Automatic source timezone inspection'), 'Version auto-detection and automatic timezone evidence do not silently assume UTC');
+    expect(str_contains($html, 'value="verified_tls" selected') && str_contains($html, 'Standard MySQL Connection (No TLS)') && str_contains($html, 'wm-security-acknowledged'), 'Three connection modes retain verified TLS as default and explicit weaker-mode confirmation');
     $root = dirname(__DIR__, 3);
     if (!defined('PATH_MODS')) define('PATH_MODS', $root . '/modules');
     $module = new \FOSSBilling\Module('whmcsmigrator');
@@ -32,7 +33,7 @@ if (in_array('--stdout', $argv, true)) {
     $di['filesystem'] = new Symfony\Component\Filesystem\Filesystem();
     $module->setDi($di);
     $manifest = $module->getManifest();
-    expect($manifest['author'] === 'Monlam Makhampa' && $manifest['version'] === '0.1', 'Native module loader recognizes the manifest and author');
+    expect($manifest['author'] === 'Monlam Makhampa' && $manifest['version'] === '0.2', 'Native module loader recognizes the manifest and author');
     expect($manifest['name'] === 'FOSSB to WHMCS Migrator' && $manifest['icon_url'] === '/modules/Whmcsmigrator/icon.png' && is_file($root . $manifest['icon_url']), 'Extension-list manifest points at the supplied local icon');
     expect($module->hasAdminController() && $module->hasService() && $module->hasSettingsPage(), 'Native module loader discovers controller, service and settings');
     expect($module->getAdminController() instanceof \Box\Mod\Whmcsmigrator\Controller\Admin, 'Native controller autoloading works without Composer edits');

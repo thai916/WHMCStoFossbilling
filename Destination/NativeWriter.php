@@ -114,7 +114,7 @@ final class NativeWriter
                 throw new SafeException('Client email conflicts with an existing destination account. No automatic link or merge is allowed.');
             }
         }
-        self::date($row['datecreated'] ?? null);
+        \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc($row['datecreated'] ?? null, $this->timezone);
     }
 
     private function currency(array $row): array
@@ -161,7 +161,7 @@ final class NativeWriter
             'pass' => password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT),
             'tax_exempt' => !empty($row['taxexempt']) ? 1 : 0,
             'client_group_id' => empty($row['groupid']) ? null : $this->resolve('clientgroups', (string) $row['groupid']),
-            'created_at' => self::date($row['datecreated'] ?? null), 'updated_at' => null,
+            'created_at' => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc($row['datecreated'] ?? null, $this->timezone), 'updated_at' => null,
         ];
     }
 

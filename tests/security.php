@@ -47,7 +47,7 @@ $denied = static function (callable $operation, string $label): void {
         expect(true, $label);
     }
 };
-foreach (['dashboard', 'schema_upgrade', 'public_ip', 'test_connection', 'mapping_get', 'mapping_save', 'analyze_table', 'run_create', 'run_status', 'run_control', 'run_batch', 'run_retry', 'archive_search', 'report_export'] as $endpoint) {
+foreach (['dashboard', 'schema_upgrade', 'public_ip', 'test_connection', 'timezone_confirm', 'mapping_get', 'mapping_save', 'analyze_table', 'run_create', 'run_status', 'run_control', 'run_batch', 'run_retry', 'archive_search', 'report_export'] as $endpoint) {
     $request = Request::create(SYSTEM_URL . 'api/admin/whmcsmigrator/' . $endpoint, 'POST');
     $denied(fn () => $newApi($request)->{$endpoint}([]), $endpoint . ' rejects missing CSRF before service execution');
 }
@@ -64,6 +64,7 @@ $denied(fn () => $newApi($request)->dashboard([]), 'Explicit endpoint permission
 $staff->allow = true;
 expect($newApi($request)->dashboard([]) === ['environment' => [], 'schema_upgrade_required' => false, 'sources' => [], 'runs' => []], 'Session-bound admin request accepted');
 $denied(fn () => $newApi($request)->public_ip([]), 'Public-IP lookup requires explicit external-request confirmation before network access');
+$denied(fn () => $newApi($request)->timezone_confirm([]), 'Timezone override requires explicit application-timezone confirmation');
 try {
     $newApi($request)->test_connection(['password' => 'NEVER_RETURN_THIS']);
 } catch (\FOSSBilling\InformationException $error) {
