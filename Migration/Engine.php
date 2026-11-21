@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Migration;
+namespace Box\Mod\Whmcstofossbilling\Migration;
 
-use Box\Mod\Whmcsmigrator\Archive\Repository;
-use Box\Mod\Whmcsmigrator\Destination\NativeWriter;
-use Box\Mod\Whmcsmigrator\Destination\Store;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
-use Box\Mod\Whmcsmigrator\Security\Sensitive;
-use Box\Mod\Whmcsmigrator\Security\Vault;
-use Box\Mod\Whmcsmigrator\Source\Reader;
-use Box\Mod\Whmcsmigrator\Finance\Reconciler;
-use Box\Mod\Whmcsmigrator\Destination\CreditPublisher;
-use Box\Mod\Whmcsmigrator\Mapping\PreviewValidator;
+use Box\Mod\Whmcstofossbilling\Archive\Repository;
+use Box\Mod\Whmcstofossbilling\Destination\NativeWriter;
+use Box\Mod\Whmcstofossbilling\Destination\Store;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Security\Sensitive;
+use Box\Mod\Whmcstofossbilling\Security\Vault;
+use Box\Mod\Whmcstofossbilling\Source\Reader;
+use Box\Mod\Whmcstofossbilling\Finance\Reconciler;
+use Box\Mod\Whmcstofossbilling\Destination\CreditPublisher;
+use Box\Mod\Whmcstofossbilling\Mapping\PreviewValidator;
 
 final class Engine
 {
@@ -28,10 +28,10 @@ final class Engine
         }
         $run = $this->store->run($runId);
         // Serialize all runs for a source, not merely an individual browser or run.
-        $lock = 'whmcsmigrator-source-' . $run['source_id'];
+        $lock = 'whmcstofossbilling-source-' . $run['source_id'];
         $this->store->lock($lock);
         try {
-            $previous = $this->store->one('SELECT result_json FROM whmcsmigrator_batch WHERE run_id=? AND request_id=?', [$runId, $requestId]);
+            $previous = $this->store->one('SELECT result_json FROM whmcstofossbilling_batch WHERE run_id=? AND request_id=?', [$runId, $requestId]);
             if ($previous) {
                 return json_decode($previous['result_json'], true, 32, JSON_THROW_ON_ERROR);
             }
@@ -48,11 +48,11 @@ final class Engine
             }
             if (in_array($run['mode'], ['reference_native', 'historical_native'], true) && isset($plan['destination_timezone']) && \FOSSBilling\Config::getProperty('i18n.timezone', 'UTC') !== $plan['destination_timezone']) throw new SafeException('Destination timezone changed after planning. Create a new reviewed plan.');
             $schema = json_decode($run['schema_json'], true, 128, JSON_THROW_ON_ERROR);
-            \Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($schema, array_keys($plan['tables']), $run['mode'] === 'dry_run' ? ($plan['target_mode'] ?? 'reference_native') : $run['mode']);
+            \Box\Mod\Whmcstofossbilling\Source\SourceTimezone::assertNativeStorage($schema, array_keys($plan['tables']), $run['mode'] === 'dry_run' ? ($plan['target_mode'] ?? 'reference_native') : $run['mode']);
             $mapping = json_decode($run['mapping_json'], true, 128, JSON_THROW_ON_ERROR);
             $cursor = null;
             foreach (array_keys($plan['tables']) as $table) {
-                $candidate = $this->store->one("SELECT * FROM whmcsmigrator_cursor WHERE run_id=? AND table_name=? AND status='pending'", [$runId, $table]);
+                $candidate = $this->store->one("SELECT * FROM whmcstofossbilling_cursor WHERE run_id=? AND table_name=? AND status='pending'", [$runId, $table]);
                 if ($candidate) {
                     $cursor = $candidate;
                     break;
@@ -67,7 +67,7 @@ final class Engine
             }
             $source = $this->store->source((int) $run['source_id']);
             $options = $this->vault->open($source['credentials']);
-            \Box\Mod\Whmcsmigrator\Source\ConnectionOptions::assertPlan($options, $plan);
+            \Box\Mod\Whmcstofossbilling\Source\ConnectionOptions::assertPlan($options, $plan);
             $reader = new Reader($options);
             if (Store::json($reader->inspect()) !== Store::json($schema)) {
                 throw new SafeException('Source schema changed after preflight. Stop and review a new plan.');
@@ -121,7 +121,7 @@ final class Engine
                         'imported', 'date_fallback' => 'imported', 'skipped' => 'skipped', 'failed' => 'failed', default => 'archived',
                     };
                     // Preview counts are separate in the report and are never described as actual archives.
-                    $this->store->execute("UPDATE whmcsmigrator_cursor SET after_id=?,processed=processed+1,`$column`=`$column`+1 WHERE id=?", [$key, $cursor['id']]);
+                    $this->store->execute("UPDATE whmcstofossbilling_cursor SET after_id=?,processed=processed+1,`$column`=`$column`+1 WHERE id=?", [$key, $cursor['id']]);
                     $this->store->pdo->commit();
                 } catch (\Throwable $error) {
                     if ($this->store->pdo->inTransaction()) {
@@ -131,7 +131,7 @@ final class Engine
                     $this->store->pdo->beginTransaction();
                     try {
                         $this->attempt($runId, $name, $key, 'failed', Sensitive::error($error), false);
-                        $this->store->execute('UPDATE whmcsmigrator_cursor SET after_id=?,processed=processed+1,failed=failed+1 WHERE id=?', [$key, $cursor['id']]);
+                        $this->store->execute('UPDATE whmcstofossbilling_cursor SET after_id=?,processed=processed+1,failed=failed+1 WHERE id=?', [$key, $cursor['id']]);
                         $this->store->pdo->commit();
                     } catch (\Throwable $persistError) {
                         $this->store->pdo->rollBack();
@@ -141,9 +141,9 @@ final class Engine
                 ++$processed;
             }
             if ($page['exhausted'] && $processed === count($rows)) {
-                $this->store->execute("UPDATE whmcsmigrator_cursor SET status='scanned' WHERE id=?", [$cursor['id']]);
+                $this->store->execute("UPDATE whmcstofossbilling_cursor SET status='scanned' WHERE id=?", [$cursor['id']]);
             }
-            $this->store->execute('UPDATE whmcsmigrator_run SET updated_at=UTC_TIMESTAMP(),last_batch_at=UTC_TIMESTAMP() WHERE id=?', [$runId]);
+            $this->store->execute('UPDATE whmcstofossbilling_run SET updated_at=UTC_TIMESTAMP(),last_batch_at=UTC_TIMESTAMP() WHERE id=?', [$runId]);
 
             return $this->result($runId, $requestId, $processed);
         } finally {
@@ -154,7 +154,7 @@ final class Engine
     public function retry(string $runId, int $limit = 5): array
     {
         $run = $this->store->run($runId);
-        $lock = 'whmcsmigrator-source-' . $run['source_id'];
+        $lock = 'whmcstofossbilling-source-' . $run['source_id'];
         $this->store->lock($lock);
         try {
             $run = $this->store->run($runId);
@@ -163,7 +163,7 @@ final class Engine
             }
             $source = $this->store->source((int) $run['source_id']);
             $options = $this->vault->open($source['credentials']);
-            \Box\Mod\Whmcsmigrator\Source\ConnectionOptions::assertPlan($options, json_decode($run['plan_json'], true, 128, JSON_THROW_ON_ERROR));
+            \Box\Mod\Whmcstofossbilling\Source\ConnectionOptions::assertPlan($options, json_decode($run['plan_json'], true, 128, JSON_THROW_ON_ERROR));
             $reader = new Reader($options);
             $schema = json_decode($run['schema_json'], true, 128, JSON_THROW_ON_ERROR);
             if (Store::json($reader->inspect()) !== $run['schema_json']) {
@@ -171,7 +171,7 @@ final class Engine
             }
             $plan = json_decode($run['plan_json'], true, 128, JSON_THROW_ON_ERROR);
             if (in_array($run['mode'], ['reference_native', 'historical_native'], true) && ($plan['adapter_revision'] ?? 1) !== 2) throw new SafeException('Native adapter revision changed. A new reviewed run is required.');
-            \Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($schema, array_keys($plan['tables']), $run['mode'] === 'dry_run' ? ($plan['target_mode'] ?? 'reference_native') : $run['mode']);
+            \Box\Mod\Whmcstofossbilling\Source\SourceTimezone::assertNativeStorage($schema, array_keys($plan['tables']), $run['mode'] === 'dry_run' ? ($plan['target_mode'] ?? 'reference_native') : $run['mode']);
             if (isset($plan['destination_timezone']) && \FOSSBilling\Config::getProperty('i18n.timezone', 'UTC') !== $plan['destination_timezone']) throw new SafeException('Destination timezone changed after planning. Retrying native history is blocked.');
             if ($this->store->verifyDestination()['fingerprint'] !== $plan['destination_fingerprint']) {
                 throw new SafeException('Destination schema changed; retries are blocked pending a new plan.');
@@ -179,7 +179,7 @@ final class Engine
             $mapping = json_decode($run['mapping_json'], true, 128, JSON_THROW_ON_ERROR);
             $native = new NativeWriter($this->store, (int) $source['id'], $options['prefix'], $plan['source_timezone'] ?? null, $plan['invalid_date_fallback'] ?? null);
             $archive = new Repository($this->store);
-            $failures = $this->store->all("SELECT * FROM whmcsmigrator_attempt WHERE run_id=? AND status='failed' AND attempts<5 ORDER BY id LIMIT " . $limit, [$runId]);
+            $failures = $this->store->all("SELECT * FROM whmcstofossbilling_attempt WHERE run_id=? AND status='failed' AND attempts<5 ORDER BY id LIMIT " . $limit, [$runId]);
             $succeeded = 0;
             foreach ($failures as $failure) {
                 $name = $failure['table_name'];
@@ -211,7 +211,7 @@ final class Engine
                     $column = match ($status) {
                         'imported', 'date_fallback' => 'imported', 'skipped' => 'skipped', default => 'archived',
                     };
-                    $this->store->execute("UPDATE whmcsmigrator_cursor SET failed=failed-1,`$column`=`$column`+1 WHERE run_id=? AND table_name=?", [$runId, $name]);
+                    $this->store->execute("UPDATE whmcstofossbilling_cursor SET failed=failed-1,`$column`=`$column`+1 WHERE run_id=? AND table_name=?", [$runId, $name]);
                     $this->store->pdo->commit();
                     ++$succeeded;
                 } catch (\Throwable $error) {
@@ -222,8 +222,8 @@ final class Engine
             $creditRetries = (new CreditPublisher($this->store))->retry($run, $limit - count($failures));
             $succeeded += $creditRetries['succeeded'];
             if ($succeeded > 0) {
-                $this->store->execute("UPDATE whmcsmigrator_reconcile_state SET after_id=0,status='scanning' WHERE run_id=?", [$runId]);
-                $this->store->execute("UPDATE whmcsmigrator_run SET status='paused',updated_at=UTC_TIMESTAMP() WHERE id=?", [$runId]);
+                $this->store->execute("UPDATE whmcstofossbilling_reconcile_state SET after_id=0,status='scanning' WHERE run_id=?", [$runId]);
+                $this->store->execute("UPDATE whmcstofossbilling_run SET status='paused',updated_at=UTC_TIMESTAMP() WHERE id=?", [$runId]);
             } else {
                 $this->finalize($runId, $run['mode']);
             }
@@ -237,23 +237,23 @@ final class Engine
     private function attempt(string $run, string $table, string $key, string $status, ?string $message, bool $retryable): void
     {
         $errorType = $status === 'date_fallback' ? 'invalid_historical_date' : ($message !== null ? 'validation_or_adapter' : null);
-        $this->store->execute('INSERT INTO whmcsmigrator_attempt (run_id,table_name,source_key,status,error_type,message,retryable,created_at,updated_at) VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE status=VALUES(status),error_type=VALUES(error_type),message=VALUES(message),retryable=VALUES(retryable),attempts=attempts+1,updated_at=UTC_TIMESTAMP()', [$run, $table, $key, $status, $errorType, $message, (int) $retryable]);
+        $this->store->execute('INSERT INTO whmcstofossbilling_attempt (run_id,table_name,source_key,status,error_type,message,retryable,created_at,updated_at) VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE status=VALUES(status),error_type=VALUES(error_type),message=VALUES(message),retryable=VALUES(retryable),attempts=attempts+1,updated_at=UTC_TIMESTAMP()', [$run, $table, $key, $status, $errorType, $message, (int) $retryable]);
     }
 
     private function finalize(string $run, string $mode): void
     {
-        $counts = $this->store->one('SELECT COALESCE(SUM(failed),0) AS failed,COALESCE(SUM(expected),0) AS expected,COALESCE(SUM(processed),0) AS processed FROM whmcsmigrator_cursor WHERE run_id=?', [$run]);
-        $creditFailures = $this->store->one("SELECT COUNT(*) AS n FROM whmcsmigrator_credit_result WHERE run_id=? AND status='failed'", [$run])['n'];
+        $counts = $this->store->one('SELECT COALESCE(SUM(failed),0) AS failed,COALESCE(SUM(expected),0) AS expected,COALESCE(SUM(processed),0) AS processed FROM whmcstofossbilling_cursor WHERE run_id=?', [$run]);
+        $creditFailures = $this->store->one("SELECT COUNT(*) AS n FROM whmcstofossbilling_credit_result WHERE run_id=? AND status='failed'", [$run])['n'];
         $financialFailures = $mode === 'historical_native' && in_array((new Reconciler($this->store))->summary($run)['status'], ['exceptions', 'in_progress'], true);
         $status = $counts['failed'] > 0 || $counts['expected'] !== $counts['processed'] || $creditFailures || $financialFailures ? 'requires_action' : ($mode === 'dry_run' ? 'preview_finished' : 'partial_archived');
         // 0.1 deliberately has no "complete migration" state: required native categories are blocked.
-        $this->store->execute('UPDATE whmcsmigrator_run SET status=?,updated_at=UTC_TIMESTAMP() WHERE id=?', [$status, $run]);
+        $this->store->execute('UPDATE whmcstofossbilling_run SET status=?,updated_at=UTC_TIMESTAMP() WHERE id=?', [$status, $run]);
     }
 
     private function result(string $run, string $request, int $processed): array
     {
         $result = ['run_id' => $run, 'status' => $this->store->run($run)['status'], 'batch_processed' => $processed];
-        $this->store->execute('INSERT INTO whmcsmigrator_batch (run_id,request_id,result_json,created_at) VALUES (?,?,?,UTC_TIMESTAMP())', [$run, $request, Store::json($result)]);
+        $this->store->execute('INSERT INTO whmcstofossbilling_batch (run_id,request_id,result_json,created_at) VALUES (?,?,?,UTC_TIMESTAMP())', [$run, $request, Store::json($result)]);
 
         return $result;
     }

@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 
-use Box\Mod\Whmcsmigrator\Security\SafeException;
-use Box\Mod\Whmcsmigrator\Source\ConnectionFactory;
-use Box\Mod\Whmcsmigrator\Source\ConnectionOptions;
-use Box\Mod\Whmcsmigrator\Source\Reader;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Source\ConnectionFactory;
+use Box\Mod\Whmcstofossbilling\Source\ConnectionOptions;
+use Box\Mod\Whmcstofossbilling\Source\Reader;
 
 if (!in_array('--disposable-server', $argv, true)) exit("Requires --disposable-server; initializes its OWN local MySQL datadir and never reads application DBA credentials.\n");
 $mysqld = getenv('WM_MYSQLD');
@@ -78,7 +78,7 @@ try {
     file_put_contents($conf, "[req]\ndistinguished_name=dn\n[dn]\n[ca_ext]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n[server_ext]\nbasicConstraints=critical,CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n");
     $crypto = ['config' => $conf, 'private_key_bits' => 2048, 'digest_alg' => 'sha256'];
     $caKey = openssl_pkey_new($crypto);
-    $caRequest = openssl_csr_new(['commonName' => 'Whmcsmigrator disposable CA'], $caKey, $crypto);
+    $caRequest = openssl_csr_new(['commonName' => 'Whmcstofossbilling disposable CA'], $caKey, $crypto);
     $caCert = openssl_csr_sign($caRequest, null, $caKey, 2, $crypto + ['x509_extensions' => 'ca_ext'], 1);
     openssl_x509_export_to_file($caCert, $directory . '/ca.pem');
     $serverKey = openssl_pkey_new($crypto);

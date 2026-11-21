@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Destination;
+namespace Box\Mod\Whmcstofossbilling\Destination;
 
-use Box\Mod\Whmcsmigrator\Archive\Sanitizer;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Archive\Sanitizer;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 final class ProductImporter
 {
@@ -58,7 +58,7 @@ final class ProductImporter
             }
             if (!empty($row['servergroup'])) {
                 $config['legacy_server_group'] = (string) $row['servergroup'];
-                $members = $this->store->all("SELECT a.payload FROM whmcsmigrator_snapshot_link l JOIN whmcsmigrator_snapshot a ON a.id=l.snapshot_id WHERE l.run_id=? AND l.table_name=? AND l.field_name='groupid' AND l.target_key=? ORDER BY a.id LIMIT 2", [$run, $this->prefix . 'servergroupsrel', (string) $row['servergroup']]);
+                $members = $this->store->all("SELECT a.payload FROM whmcstofossbilling_snapshot_link l JOIN whmcstofossbilling_snapshot a ON a.id=l.snapshot_id WHERE l.run_id=? AND l.table_name=? AND l.field_name='groupid' AND l.target_key=? ORDER BY a.id LIMIT 2", [$run, $this->prefix . 'servergroupsrel', (string) $row['servergroup']]);
                 if (count($members) === 1) {
                     $server = json_decode($members[0]['payload'], true, 128, JSON_THROW_ON_ERROR);
                     $config['server_id'] = $this->persistence->resolve('servers', (string) ($server['serverid'] ?? ''), 'service_hosting_server');

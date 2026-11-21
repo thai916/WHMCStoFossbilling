@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Migration;
+namespace Box\Mod\Whmcstofossbilling\Migration;
 
-use Box\Mod\Whmcsmigrator\Destination\NativeWriter;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
-use Box\Mod\Whmcsmigrator\Source\Catalog;
-use Box\Mod\Whmcsmigrator\Destination\Store;
+use Box\Mod\Whmcstofossbilling\Destination\NativeWriter;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Source\Catalog;
+use Box\Mod\Whmcstofossbilling\Destination\Store;
 
 final class Planner
 {
@@ -37,7 +37,7 @@ final class Planner
             if ($definition['classification'] !== 'archive') {
                 throw new SafeException('A selected table is sensitive, unsupported, or requires a reviewed extractor.');
             }
-            $analysis = $store->one('SELECT * FROM whmcsmigrator_analysis WHERE source_id=? AND table_name=? AND analyzed_at > UTC_TIMESTAMP() - INTERVAL 1 HOUR', [$source, $name]);
+            $analysis = $store->one('SELECT * FROM whmcstofossbilling_analysis WHERE source_id=? AND table_name=? AND analyzed_at > UTC_TIMESTAMP() - INTERVAL 1 HOUR', [$source, $name]);
             if (!$analysis || $analysis['schema_checksum'] !== hash('sha256', Store::json($schema))) {
                 throw new SafeException('Source counts are missing, stale or based on a different schema. Analyze the selected tables again.');
             }

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Source;
+namespace Box\Mod\Whmcstofossbilling\Source;
 
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 final class ConnectionFactory
 {

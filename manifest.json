@@ -1,7 +1,7 @@
 {
-  "id": "whmcsmigrator",
+  "id": "whmcstofossbilling",
   "type": "mod",
-  "name": "FOSSB to WHMCS Migrator",
+  "name": "WHMCStoFossbilling",
   "icon_url": "icon.png",
   "description": "A vibe coded WHMCS migration extension focused on read-only source access, historical preservation, resumable processing and financial reconciliation.",
   "author": "Monlam Makhampa",

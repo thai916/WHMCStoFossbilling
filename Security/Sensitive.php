@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Security;
+namespace Box\Mod\Whmcstofossbilling\Security;
 
 final class Sensitive
 {
@@ -23,7 +23,7 @@ final class Sensitive
             return $error->getMessage();
         }
         if ($error instanceof \PDOException) {
-            return \Box\Mod\Whmcsmigrator\Source\ConnectionDiagnostics::message($error);
+            return \Box\Mod\Whmcstofossbilling\Source\ConnectionDiagnostics::message($error);
         }
 
         return 'Operation failed safely. No source values are included in this diagnostic.';

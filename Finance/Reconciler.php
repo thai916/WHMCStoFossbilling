@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Finance;
+namespace Box\Mod\Whmcstofossbilling\Finance;
 
-use Box\Mod\Whmcsmigrator\Destination\Store;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
-use Box\Mod\Whmcsmigrator\Security\Sensitive;
+use Box\Mod\Whmcstofossbilling\Destination\Store;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Security\Sensitive;
 
 /**
  * Compares the extracted baseline with actual native records, in bounded requests.
@@ -23,10 +23,10 @@ final class Reconciler
         $plan = json_decode($run['plan_json'], true, 128, JSON_THROW_ON_ERROR);
         $prefix = $plan['source_prefix'] ?? null;
         if (!$prefix || $run['mode'] === 'dry_run') return true;
-        $this->store->execute('INSERT IGNORE INTO whmcsmigrator_reconcile_state (run_id) VALUES (?)', [$run['id']]);
-        $state = $this->store->one('SELECT * FROM whmcsmigrator_reconcile_state WHERE run_id=?', [$run['id']]);
+        $this->store->execute('INSERT IGNORE INTO whmcstofossbilling_reconcile_state (run_id) VALUES (?)', [$run['id']]);
+        $state = $this->store->one('SELECT * FROM whmcstofossbilling_reconcile_state WHERE run_id=?', [$run['id']]);
         if ($state['status'] === 'finished') return true;
-        $rows = $this->store->all('SELECT id,source_id,table_name,source_key,payload FROM whmcsmigrator_snapshot WHERE run_id=? AND id>? AND table_name IN (?,?,?,?) ORDER BY id LIMIT ' . min(50, max(1, $limit)), [$run['id'], $state['after_id'], $prefix . 'clients', $prefix . 'invoices', $prefix . 'accounts', $prefix . 'credit']);
+        $rows = $this->store->all('SELECT id,source_id,table_name,source_key,payload FROM whmcstofossbilling_snapshot WHERE run_id=? AND id>? AND table_name IN (?,?,?,?) ORDER BY id LIMIT ' . min(50, max(1, $limit)), [$run['id'], $state['after_id'], $prefix . 'clients', $prefix . 'invoices', $prefix . 'accounts', $prefix . 'credit']);
         foreach ($rows as $record) {
             $this->store->pdo->beginTransaction();
             try {
@@ -50,14 +50,14 @@ final class Reconciler
                     $native['_actual_currency'] = $nativeCurrency;
                 }
                 $this->save($run['id'], $record, $suffix, $code, $basis, $source, $native ?? [], $status, null);
-                $this->store->execute('UPDATE whmcsmigrator_reconcile_state SET after_id=?,checked_at=UTC_TIMESTAMP() WHERE run_id=?', [$record['id'], $run['id']]);
+                $this->store->execute('UPDATE whmcstofossbilling_reconcile_state SET after_id=?,checked_at=UTC_TIMESTAMP() WHERE run_id=?', [$record['id'], $run['id']]);
                 $this->store->pdo->commit();
             } catch (\Throwable $error) {
                 if ($this->store->pdo->inTransaction()) $this->store->pdo->rollBack();
                 $this->store->pdo->beginTransaction();
                 try {
                     $this->save($run['id'], $record, substr($record['table_name'], strlen($prefix)), null, 'unresolved', [], [], 'invalid_source_or_native', Sensitive::error($error));
-                    $this->store->execute('UPDATE whmcsmigrator_reconcile_state SET after_id=?,checked_at=UTC_TIMESTAMP() WHERE run_id=?', [$record['id'], $run['id']]);
+                    $this->store->execute('UPDATE whmcstofossbilling_reconcile_state SET after_id=?,checked_at=UTC_TIMESTAMP() WHERE run_id=?', [$record['id'], $run['id']]);
                     $this->store->pdo->commit();
                 } catch (\Throwable $persistError) {
                     $this->store->pdo->rollBack();
@@ -66,7 +66,7 @@ final class Reconciler
             }
         }
         if (count($rows) < min(50, max(1, $limit))) {
-            $this->store->execute("UPDATE whmcsmigrator_reconcile_state SET status='finished',checked_at=UTC_TIMESTAMP() WHERE run_id=?", [$run['id']]);
+            $this->store->execute("UPDATE whmcstofossbilling_reconcile_state SET status='finished',checked_at=UTC_TIMESTAMP() WHERE run_id=?", [$run['id']]);
             return true;
         }
 
@@ -97,7 +97,7 @@ final class Reconciler
     private function nativeMetrics(int $source, string $table, string $key, string $suffix): ?array
     {
         $entity = match ($suffix) { 'clients' => 'client', 'credit' => 'client_balance', 'accounts' => 'transaction', 'invoices' => 'invoice' };
-        $mapping = $this->store->one('SELECT destination_id,destination_checksum FROM whmcsmigrator_identity WHERE source_id=? AND table_name=? AND source_key=? AND destination_entity=?', [$source, $table, $key, $entity]);
+        $mapping = $this->store->one('SELECT destination_id,destination_checksum FROM whmcstofossbilling_identity WHERE source_id=? AND table_name=? AND source_key=? AND destination_entity=?', [$source, $table, $key, $entity]);
         if (!$mapping) return null;
         $id = $mapping['destination_id'];
         $current = $this->store->one('SELECT * FROM `' . $entity . '` WHERE id=?', [$id]);
@@ -105,7 +105,7 @@ final class Reconciler
         $modified = !hash_equals((string) $mapping['destination_checksum'], hash('sha256', Store::json($current)));
         if ($suffix === 'clients') {
             $sum = $this->store->one('SELECT CAST(COALESCE(SUM(amount),0) AS DECIMAL(18,2)) AS amount FROM client_balance WHERE client_id=?', [$id]);
-            if ($this->store->one("SELECT b.id FROM client_balance b LEFT JOIN whmcsmigrator_identity i ON i.source_id=? AND i.destination_entity='client_balance' AND i.destination_id=b.id WHERE b.client_id=? AND i.id IS NULL LIMIT 1", [$source, $id])) $modified = true;
+            if ($this->store->one("SELECT b.id FROM client_balance b LEFT JOIN whmcstofossbilling_identity i ON i.source_id=? AND i.destination_entity='client_balance' AND i.destination_id=b.id WHERE b.client_id=? AND i.id IS NULL LIMIT 1", [$source, $id])) $modified = true;
 
             return ['balance' => Decimal::money($sum['amount']), '_currency' => $current['currency'], '_modified' => $modified];
         }
@@ -129,7 +129,7 @@ final class Reconciler
         $amount = $this->store->one('SELECT CAST(COALESCE(SUM(CAST(price AS DECIMAL(18,2))*quantity),0) AS DECIMAL(18,2)) AS subtotal,CAST(COALESCE(SUM(CASE WHEN taxed=1 THEN CAST(price AS DECIMAL(18,2))*quantity ELSE 0 END),0) AS DECIMAL(18,2)) AS taxable FROM invoice_item WHERE invoice_id=?', [$id]);
         $total = bcadd($amount['subtotal'], Decimal::tax($amount['taxable'], Decimal::money($invoice['taxrate'] ?? '0', 6)), 2);
 
-        $children = $this->store->all("SELECT ii.*,i.destination_checksum AS expected_hash FROM invoice_item ii LEFT JOIN whmcsmigrator_identity i ON i.source_id=? AND i.destination_entity='invoice_item' AND i.destination_id=ii.id WHERE ii.invoice_id=? LIMIT 201", [$source, $id]);
+        $children = $this->store->all("SELECT ii.*,i.destination_checksum AS expected_hash FROM invoice_item ii LEFT JOIN whmcstofossbilling_identity i ON i.source_id=? AND i.destination_entity='invoice_item' AND i.destination_id=ii.id WHERE ii.invoice_id=? LIMIT 201", [$source, $id]);
         if (count($children) > 200) $modified = true;
         foreach ($children as $child) {
             $expected = $child['expected_hash'];
@@ -146,12 +146,12 @@ final class Reconciler
         $basis = 'explicit_source_currency';
         if ($value === null && $suffix !== 'clients') {
             $clientKey = (string) ($row['userid'] ?? $row['clientid'] ?? '');
-            $client = $this->store->one('SELECT payload FROM whmcsmigrator_snapshot WHERE run_id=? AND table_name=? AND source_key=?', [$run, $prefix . 'clients', $clientKey]);
+            $client = $this->store->one('SELECT payload FROM whmcstofossbilling_snapshot WHERE run_id=? AND table_name=? AND source_key=?', [$run, $prefix . 'clients', $clientKey]);
             $value = $client ? (json_decode($client['payload'], true, 128, JSON_THROW_ON_ERROR)['currency'] ?? null) : null;
             $basis = 'inferred_current_client_currency';
         }
         if (is_string($value) && preg_match('/\A[A-Za-z]{3}\z/D', $value)) return [strtoupper($value), $basis];
-        $currency = $this->store->one('SELECT payload FROM whmcsmigrator_snapshot WHERE run_id=? AND table_name=? AND source_key=?', [$run, $prefix . 'currencies', (string) $value]);
+        $currency = $this->store->one('SELECT payload FROM whmcstofossbilling_snapshot WHERE run_id=? AND table_name=? AND source_key=?', [$run, $prefix . 'currencies', (string) $value]);
         $code = $currency ? (json_decode($currency['payload'], true, 128, JSON_THROW_ON_ERROR)['code'] ?? null) : null;
 
         return [is_string($code) && preg_match('/\A[A-Za-z]{3}\z/D', $code) ? strtoupper($code) : null, $basis];
@@ -159,11 +159,11 @@ final class Reconciler
 
     private function save(string $run, array $record, string $category, ?string $code, string $basis, array $source, array $native, string $status, ?string $message): void
     {
-        $previous = $this->store->one('SELECT currency,source_metrics,native_metrics FROM whmcsmigrator_assessment WHERE run_id=? AND table_name=? AND source_key=?', [$run, $record['table_name'], $record['source_key']]);
+        $previous = $this->store->one('SELECT currency,source_metrics,native_metrics FROM whmcstofossbilling_assessment WHERE run_id=? AND table_name=? AND source_key=?', [$run, $record['table_name'], $record['source_key']]);
         if ($previous) {
             $this->totals($run, $previous['currency'], json_decode($previous['source_metrics'], true, 32, JSON_THROW_ON_ERROR), json_decode($previous['native_metrics'], true, 32, JSON_THROW_ON_ERROR), -1);
         }
-        $this->store->execute('INSERT INTO whmcsmigrator_assessment (run_id,table_name,source_key,category,currency,currency_basis,source_metrics,native_metrics,status,message,checked_at) VALUES (?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE source_metrics=VALUES(source_metrics),native_metrics=VALUES(native_metrics),status=VALUES(status),message=VALUES(message),checked_at=UTC_TIMESTAMP()', [$run, $record['table_name'], $record['source_key'], $category, $code, $basis, Store::json($source), Store::json($native), $status, $message]);
+        $this->store->execute('INSERT INTO whmcstofossbilling_assessment (run_id,table_name,source_key,category,currency,currency_basis,source_metrics,native_metrics,status,message,checked_at) VALUES (?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE source_metrics=VALUES(source_metrics),native_metrics=VALUES(native_metrics),status=VALUES(status),message=VALUES(message),checked_at=UTC_TIMESTAMP()', [$run, $record['table_name'], $record['source_key'], $category, $code, $basis, Store::json($source), Store::json($native), $status, $message]);
         $this->totals($run, $code, $source, $native, 1);
     }
 
@@ -172,7 +172,7 @@ final class Reconciler
         if ($code === null) return;
         foreach ($source as $metric => $value) {
             $actual = empty($native['_currency_conflict']) && is_string($native[$metric] ?? null) ? $native[$metric] : null;
-            $this->store->execute('INSERT INTO whmcsmigrator_reconcile_total (run_id,metric,currency,source_total,native_total,source_records,native_records) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE source_total=source_total+VALUES(source_total),native_total=native_total+VALUES(native_total),source_records=source_records+VALUES(source_records),native_records=native_records+VALUES(native_records)', [
+            $this->store->execute('INSERT INTO whmcstofossbilling_reconcile_total (run_id,metric,currency,source_total,native_total,source_records,native_records) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE source_total=source_total+VALUES(source_total),native_total=native_total+VALUES(native_total),source_records=source_records+VALUES(source_records),native_records=native_records+VALUES(native_records)', [
                 $run, $metric, $code, bcmul($value, (string) $direction, 2),
                 $actual === null ? '0.00' : bcmul($actual, (string) $direction, 2),
                 $direction, $actual === null ? 0 : $direction,
@@ -182,10 +182,10 @@ final class Reconciler
 
     public function summary(string $run): array
     {
-        $state = $this->store->one('SELECT status,checked_at FROM whmcsmigrator_reconcile_state WHERE run_id=?', [$run]);
+        $state = $this->store->one('SELECT status,checked_at FROM whmcstofossbilling_reconcile_state WHERE run_id=?', [$run]);
         if (!$state) return ['status' => 'not_performed', 'reason' => 'No completed extracted-baseline assessment exists for this run.'];
-        $counts = $this->store->all('SELECT status,COUNT(*) AS records FROM whmcsmigrator_assessment WHERE run_id=? GROUP BY status', [$run]);
-        $exceptions = $this->store->all("SELECT table_name,source_key,currency,currency_basis,status,message,source_metrics,native_metrics FROM whmcsmigrator_assessment WHERE run_id=? AND status<>'matched' ORDER BY id LIMIT 100", [$run]);
+        $counts = $this->store->all('SELECT status,COUNT(*) AS records FROM whmcstofossbilling_assessment WHERE run_id=? GROUP BY status', [$run]);
+        $exceptions = $this->store->all("SELECT table_name,source_key,currency,currency_basis,status,message,source_metrics,native_metrics FROM whmcstofossbilling_assessment WHERE run_id=? AND status<>'matched' ORDER BY id LIMIT 100", [$run]);
         foreach ($exceptions as &$exception) {
             $exception['source_metrics'] = json_decode($exception['source_metrics'], true, 32, JSON_THROW_ON_ERROR);
             $exception['native_metrics'] = json_decode($exception['native_metrics'], true, 32, JSON_THROW_ON_ERROR);
@@ -193,7 +193,7 @@ final class Reconciler
         $totals = [];
         // Totals are updated atomically with each assessment/checkpoint, so dashboard
         // polling never rescans all JSON records or mixes currencies.
-        foreach ($this->store->all('SELECT metric,currency,CAST(source_total AS CHAR) AS source_total,CASE WHEN native_records=0 THEN NULL ELSE CAST(native_total AS CHAR) END AS native_total,source_records,native_records FROM whmcsmigrator_reconcile_total WHERE run_id=? AND source_records>0 ORDER BY metric,currency', [$run]) as $total) {
+        foreach ($this->store->all('SELECT metric,currency,CAST(source_total AS CHAR) AS source_total,CASE WHEN native_records=0 THEN NULL ELSE CAST(native_total AS CHAR) END AS native_total,source_records,native_records FROM whmcstofossbilling_reconcile_total WHERE run_id=? AND source_records>0 ORDER BY metric,currency', [$run]) as $total) {
             $metric = $total['metric'];
             unset($total['metric']);
             $totals[$metric][] = $total;

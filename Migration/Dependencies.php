@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Migration;
+namespace Box\Mod\Whmcstofossbilling\Migration;
 
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 final class Dependencies
 {

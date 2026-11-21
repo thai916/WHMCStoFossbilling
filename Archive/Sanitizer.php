@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Archive;
+namespace Box\Mod\Whmcstofossbilling\Archive;
 
 /** Free text may contain historical credentials. Redactions are disclosed, not silently omitted. */
 final class Sanitizer

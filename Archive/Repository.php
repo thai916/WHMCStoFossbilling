@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Archive;
+namespace Box\Mod\Whmcstofossbilling\Archive;
 
-use Box\Mod\Whmcsmigrator\Destination\Store;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Destination\Store;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 final class Repository
 {
@@ -56,35 +56,35 @@ final class Repository
             throw new SafeException('A source record exceeds the archive row limit. It was not truncated.');
         }
         $checksum = hash('sha256', $payload);
-        $previous = $this->store->one('SELECT * FROM whmcsmigrator_archive WHERE source_id=? AND table_name=? AND source_key=?', [$source, $table, $key]);
+        $previous = $this->store->one('SELECT * FROM whmcstofossbilling_archive WHERE source_id=? AND table_name=? AND source_key=?', [$source, $table, $key]);
         $changed = !$previous || $previous['checksum'] !== $checksum || $previous['exclusions'] !== Store::json($exclusions);
         if ($previous && $changed) {
-            $this->store->execute('INSERT INTO whmcsmigrator_archive_revision (archive_id,payload,checksum,exclusions,run_id,preserved_at) VALUES (?,?,?,?,?,UTC_TIMESTAMP())', [$previous['id'], $previous['payload'], $previous['checksum'], $previous['exclusions'], $previous['run_id']]);
+            $this->store->execute('INSERT INTO whmcstofossbilling_archive_revision (archive_id,payload,checksum,exclusions,run_id,preserved_at) VALUES (?,?,?,?,?,UTC_TIMESTAMP())', [$previous['id'], $previous['payload'], $previous['checksum'], $previous['exclusions'], $previous['run_id']]);
         }
         $this->store->execute(
-            'INSERT INTO whmcsmigrator_archive (source_id,table_name,source_key,payload,checksum,original_dates,relationships,exclusions,run_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE payload=VALUES(payload),checksum=VALUES(checksum),original_dates=VALUES(original_dates),relationships=VALUES(relationships),exclusions=VALUES(exclusions),run_id=VALUES(run_id),updated_at=UTC_TIMESTAMP()',
+            'INSERT INTO whmcstofossbilling_archive (source_id,table_name,source_key,payload,checksum,original_dates,relationships,exclusions,run_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE payload=VALUES(payload),checksum=VALUES(checksum),original_dates=VALUES(original_dates),relationships=VALUES(relationships),exclusions=VALUES(exclusions),run_id=VALUES(run_id),updated_at=UTC_TIMESTAMP()',
             [$source, $table, $key, $payload, $checksum, Store::json($dates), Store::json($links), Store::json($exclusions), $run]
         );
-        $this->store->execute('DELETE FROM whmcsmigrator_archive_link WHERE source_id=? AND table_name=? AND source_key=?', [$source, $table, $key]);
+        $this->store->execute('DELETE FROM whmcstofossbilling_archive_link WHERE source_id=? AND table_name=? AND source_key=?', [$source, $table, $key]);
         foreach ($links as $field => $value) {
             if ((is_string($value) || is_int($value)) && strlen((string) $value) <= 191) {
-                $this->store->execute('INSERT INTO whmcsmigrator_archive_link (source_id,table_name,source_key,field_name,target_key) VALUES (?,?,?,?,?)', [$source, $table, $key, $field, (string) $value]);
+                $this->store->execute('INSERT INTO whmcstofossbilling_archive_link (source_id,table_name,source_key,field_name,target_key) VALUES (?,?,?,?,?)', [$source, $table, $key, $field, (string) $value]);
             }
         }
         // A new run must not replace the evidence used by a previous run's
         // projections/reconciliation. Latest searchable archive and per-run snapshot are distinct.
-        $this->store->execute('INSERT INTO whmcsmigrator_snapshot (run_id,source_id,table_name,source_key,payload,checksum) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE payload=VALUES(payload),checksum=VALUES(checksum)', [$run, $source, $table, $key, $payload, $checksum]);
-        $snapshot = $this->store->one('SELECT id FROM whmcsmigrator_snapshot WHERE run_id=? AND table_name=? AND source_key=?', [$run, $table, $key]);
-        $this->store->execute('DELETE FROM whmcsmigrator_snapshot_link WHERE snapshot_id=?', [$snapshot['id']]);
+        $this->store->execute('INSERT INTO whmcstofossbilling_snapshot (run_id,source_id,table_name,source_key,payload,checksum) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE payload=VALUES(payload),checksum=VALUES(checksum)', [$run, $source, $table, $key, $payload, $checksum]);
+        $snapshot = $this->store->one('SELECT id FROM whmcstofossbilling_snapshot WHERE run_id=? AND table_name=? AND source_key=?', [$run, $table, $key]);
+        $this->store->execute('DELETE FROM whmcstofossbilling_snapshot_link WHERE snapshot_id=?', [$snapshot['id']]);
         foreach ($links as $field => $value) {
             if ((is_string($value) || is_int($value)) && strlen((string) $value) <= 191) {
-                $this->store->execute('INSERT INTO whmcsmigrator_snapshot_link (snapshot_id,run_id,table_name,field_name,target_key) VALUES (?,?,?,?,?)', [$snapshot['id'], $run, $table, $field, (string) $value]);
+                $this->store->execute('INSERT INTO whmcstofossbilling_snapshot_link (snapshot_id,run_id,table_name,field_name,target_key) VALUES (?,?,?,?,?)', [$snapshot['id'], $run, $table, $field, (string) $value]);
             }
         }
         $referenceField = match ($definition['suffix']) { 'invoices' => 'invoicenum', 'tickets' => 'tid', default => null };
         if ($referenceField !== null && isset($data[$referenceField])) {
             $kind = $definition['suffix'] === 'invoices' ? 'invoice' : 'ticket';
-            $this->store->execute('INSERT INTO whmcsmigrator_legacy_reference (source_id,table_name,source_key,kind,reference_hash) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE reference_hash=VALUES(reference_hash)', [$source, $table, $key, $kind, hash('sha256', trim((string) $data[$referenceField]))]);
+            $this->store->execute('INSERT INTO whmcstofossbilling_legacy_reference (source_id,table_name,source_key,kind,reference_hash) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE reference_hash=VALUES(reference_hash)', [$source, $table, $key, $kind, hash('sha256', trim((string) $data[$referenceField]))]);
         }
 
         return ['checksum' => $checksum, 'changed' => $changed];

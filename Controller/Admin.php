@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Controller;
+namespace Box\Mod\Whmcstofossbilling\Controller;
 
 use Symfony\Component\HttpFoundation\Response;
 
@@ -23,34 +23,34 @@ final class Admin implements \FOSSBilling\InjectionAwareInterface
     public function fetchNavigation(): array
     {
         return ['subpages' => [[
-            'location' => 'extensions', 'index' => 300, 'label' => 'FOSSB to WHMCS',
-            'uri' => $this->di['url']->adminLink('whmcsmigrator'), 'class' => '',
+            'location' => 'extensions', 'index' => 300, 'label' => 'WHMCStoFossbilling',
+            'uri' => $this->di['url']->adminLink('whmcstofossbilling'), 'class' => '',
         ]]];
     }
 
     public function register(\Box_App &$app): void
     {
-        $app->get('/whmcsmigrator', 'get_index', [], static::class);
-        $app->get('/whmcsmigrator/asset/:name', 'get_asset', ['name' => 'wizard\.(?:js|css)'], static::class);
+        $app->get('/whmcstofossbilling', 'get_index', [], static::class);
+        $app->get('/whmcstofossbilling/asset/:name', 'get_asset', ['name' => 'wizard\.(?:js|css)'], static::class);
     }
 
     private function authorize(): void
     {
         $this->di['is_admin_logged'];
-        $this->di['mod_service']('staff')->checkPermissionsAndThrowException('whmcsmigrator', 'view', null, $this->di['loggedin_admin']);
+        $this->di['mod_service']('staff')->checkPermissionsAndThrowException('whmcstofossbilling', 'view', null, $this->di['loggedin_admin']);
     }
 
     public function get_index(\Box_App $app): string
     {
         $this->authorize();
 
-        return $app->render('mod_whmcsmigrator_index', [
+        return $app->render('mod_whmcstofossbilling_index', [
             'migrator_csrf' => $this->di['session']->get('csrf_token'),
-            'migrator_api' => $this->di['url']->link('api/admin/whmcsmigrator'),
-            'migrator_js' => $this->di['url']->adminLink('whmcsmigrator/asset/wizard.js'),
-            'migrator_css' => $this->di['url']->adminLink('whmcsmigrator/asset/wizard.css'),
-            'migrator_icon' => $this->di['url']->link('modules/Whmcsmigrator/icon.png'),
-            'migrator_ca' => \Box\Mod\Whmcsmigrator\Source\CaBundle::defaultPath(),
+            'migrator_api' => $this->di['url']->link('api/admin/whmcstofossbilling'),
+            'migrator_js' => $this->di['url']->adminLink('whmcstofossbilling/asset/wizard.js'),
+            'migrator_css' => $this->di['url']->adminLink('whmcstofossbilling/asset/wizard.css'),
+            'migrator_icon' => $this->di['url']->link('modules/Whmcstofossbilling/icon.png'),
+            'migrator_ca' => \Box\Mod\Whmcstofossbilling\Source\CaBundle::defaultPath(),
             'migrator_timezones' => array_values(array_unique(['UTC', ...\DateTimeZone::listIdentifiers()])),
         ]);
     }

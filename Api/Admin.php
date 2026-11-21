@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Api;
+namespace Box\Mod\Whmcstofossbilling\Api;
 
-use Box\Mod\Whmcsmigrator\Report\Exporter;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
-use Box\Mod\Whmcsmigrator\Security\Sensitive;
+use Box\Mod\Whmcstofossbilling\Report\Exporter;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Security\Sensitive;
 use Symfony\Component\HttpFoundation\Response;
 
 final class Admin extends \FOSSBilling\Api\AbstractApi
 {
     private function guarded(string $permission, callable $operation): mixed
     {
-        $this->checkPermissions('whmcsmigrator', $permission);
+        $this->checkPermissions('whmcstofossbilling', $permission);
         if (\FOSSBilling\Api\Identity::typeFromObject($this->getIdentity()) !== 'admin') {
             throw new \FOSSBilling\InformationException('An authenticated administrator is required.', null, 403);
         }
@@ -57,7 +57,7 @@ final class Admin extends \FOSSBilling\Api\AbstractApi
     public function schema_upgrade(array $data = []): array
     {
         return $this->guarded('configure', function () use ($data): array {
-            $this->checkPermissions('whmcsmigrator', 'execute');
+            $this->checkPermissions('whmcstofossbilling', 'execute');
             if (($data['confirmation'] ?? '') !== 'UPGRADE EXTENSION TABLES') throw new SafeException('Explicit extension-schema upgrade confirmation is required.');
 
             return ['installed' => $this->getService()->install()];
@@ -69,7 +69,7 @@ final class Admin extends \FOSSBilling\Api\AbstractApi
         return $this->guarded('configure', function () use ($data): array {
             if (($data['confirmation'] ?? '') !== 'LOOK UP PUBLIC IP') throw new SafeException('Confirm the external public-IP lookup first. The lookup provider will see the server’s outbound IP.');
 
-            return \Box\Mod\Whmcsmigrator\Source\PublicIp::lookup();
+            return \Box\Mod\Whmcstofossbilling\Source\PublicIp::lookup();
         });
     }
 

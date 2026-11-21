@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Mapping;
+namespace Box\Mod\Whmcstofossbilling\Mapping;
 
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 final class EventDate
 {
@@ -16,7 +16,7 @@ final class EventDate
         // Business calendar dates are not instants and must retain their original day.
         if (strlen($value) === 10) {
             try {
-                return \Box\Mod\Whmcsmigrator\Destination\NativeWriter::date($value);
+                return \Box\Mod\Whmcstofossbilling\Destination\NativeWriter::date($value);
             } catch (SafeException $error) {
                 if ($invalidFallback !== null && self::impossibleCalendarDate($value)) {
                     $usedFallback = true;

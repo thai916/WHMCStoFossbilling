@@ -1,14 +1,14 @@
 {% extends "layout_default.html.twig" %}
 {% set active_menu = 'extensions' %}
-{% block meta_title %}FOSSB to WHMCS Migrator{% endblock %}
+{% block meta_title %}WHMCStoFossbilling{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="{{ migrator_css }}">
 <script src="{{ migrator_js }}" defer></script>
 {% endblock %}
 {% block content %}
-<div id="whmcsmigrator" data-api="{{ migrator_api }}" data-csrf="{{ migrator_csrf }}">
+<div id="whmcstofossbilling" data-api="{{ migrator_api }}" data-csrf="{{ migrator_csrf }}">
     <div class="wm-heading">
-        <div class="wm-brand"><img src="{{ migrator_icon }}" class="wm-logo" width="56" height="56" alt=""><div><div class="text-muted small">WHMCS 8.x → FOSSBilling 0.8.9</div><h2>FOSSB to WHMCS Migrator <span class="badge bg-orange-lt">0.2 · experimental</span></h2><p>Read-only at the source. Traceable at the destination.</p></div></div>
+        <div class="wm-brand"><img src="{{ migrator_icon }}" class="wm-logo" width="56" height="56" alt=""><div><div class="text-muted small">WHMCS 8.x → FOSSBilling 0.8.9</div><h2>WHMCStoFossbilling <span class="badge bg-orange-lt">0.2 · experimental</span></h2><p>Read-only at the source. Traceable at the destination.</p></div></div>
         <div class="wm-seal"><strong>SELECT ONLY</strong><span>Production source protection</span></div>
     </div>
     <div class="alert alert-warning">

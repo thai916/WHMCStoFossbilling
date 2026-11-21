@@ -1,4 +1,4 @@
-# FOSSB to WHMCS Migrator — 0.2 development preview
+# WHMCStoFossbilling — 0.2 development preview
 
 **Migration direction: WHMCS 8.x → FOSSBilling 0.8.9.** The requested display name does not reverse the source and destination.
 
@@ -41,27 +41,27 @@ This extension is **vibe coded**. It requires independent security review and di
 ## Installation
 
 1. Back up the destination database and verify restoration.
-2. Place this directory at `modules/Whmcsmigrator/` — exact capitalization matters on Linux.
+2. Place this directory at `modules/Whmcstofossbilling/` — exact capitalization matters on Linux.
 3. Use the PHP runtime serving FOSSBilling, **PHP 8.3+**, with PDO MySQL, OpenSSL, BCMath, Mbstring and JSON.
 4. Log in at your FOSSBilling admin URL.
-5. In **Extensions → Overview**, activate **FOSSB to WHMCS Migrator**.
-6. Open **Extensions → FOSSB to WHMCS**.
+5. In **Extensions → Overview**, activate **WHMCStoFossbilling**.
+6. Open **Extensions → WHMCStoFossbilling**.
 
-When upgrading the initial preview, use **Upgrade extension tables only** if prompted. It requires explicit confirmation and configure/execute permission. It creates only missing `whmcsmigrator_*` tables; no core schema or business records are altered. Previously authorized native runs cannot silently acquire new adapters: cancel an old unfinished native run and create a newly reviewed plan.
+The installation directory is `Whmcstofossbilling` because FOSSBilling lowercases module IDs and applies `ucfirst()` for directory/class lookup; the displayed module and downloadable asset are `WHMCStoFossbilling`. When upgrading from `modules/Whmcsmigrator/`, remove the old directory, install as `modules/Whmcstofossbilling/`, and activate the newly named extension. Installation renames extension-owned `whmcsmigrator_*` tables to `whmcstofossbilling_*` when the new names do not already exist; stored source credentials stay decryptable, and no core schema or business records are altered. The old extension/permission entry is not reused. Previously authorized native runs cannot silently acquire new adapters: cancel an old unfinished native run and create a newly reviewed plan.
 
-Upgrading 0.1 to 0.2 adds no tables. Retest saved connections to collect security diagnostics and confirm the WHMCS server timezone in the dropdown. New run plans freeze the selected security mode and timezone; changing either requires a newly reviewed run rather than silently changing an old authorization.
+Use **Upgrade extension tables only** if prompted. It requires explicit confirmation and configure/execute permission. Upgrading 0.1 to 0.2 adds no new table definitions beyond the rename. Retest saved connections to collect security diagnostics and confirm the WHMCS server timezone in the dropdown. New run plans freeze the selected security mode and timezone; changing either requires a newly reviewed run rather than silently changing an old authorization.
 
 For this development installation:
 
 ```text
-http://fossbill.test/admin/whmcsmigrator
+http://fossbill.test/admin/whmcstofossbilling
 ```
 
 Adjust the scheme/admin prefix for your deployment. Activation creates only extension tables; it never connects to WHMCS or imports business records.
 
 No Composer update, Docker, external queue or cron is required. The existing application naturally writes runtime cache/session/log data. The extension itself does not edit core files.
 
-Apache direct requests to the module directory are denied by its own `.htaccess`, **except the non-sensitive `icon.png` used by the extensions list**; wizard assets are served by the authenticated controller. On Nginx, have the server administrator allow only `/modules/Whmcsmigrator/icon.png` and deny other direct module requests before deployment. This extension does not edit server configuration. Never deploy `.local/` development artifacts.
+Apache direct requests to the module directory are denied by its own `.htaccess`, **except the non-sensitive `icon.png` used by the extensions list**; wizard assets are served by the authenticated controller. On Nginx, have the server administrator allow only `/modules/Whmcstofossbilling/icon.png` and deny other direct module requests before deployment. This extension does not edit server configuration. Never deploy `.local/` development artifacts.
 
 ## Safe usage
 

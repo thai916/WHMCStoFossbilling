@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Destination;
+namespace Box\Mod\Whmcstofossbilling\Destination;
 
-use Box\Mod\Whmcsmigrator\Finance\Decimal;
-use Box\Mod\Whmcsmigrator\Mapping\EventDate;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Finance\Decimal;
+use Box\Mod\Whmcstofossbilling\Mapping\EventDate;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 final class PaymentImporter
 {
@@ -22,7 +22,7 @@ final class PaymentImporter
         $schema = json_decode($runRecord['schema_json'], true, 128, JSON_THROW_ON_ERROR);
         foreach ($schema as $name => $definition) {
             if (in_array($definition['suffix'], ['invoicepayment', 'invoicepayments', 'invoice_transactions'], true)) {
-                $cursor = $this->store->one('SELECT expected,status,failed FROM whmcsmigrator_cursor WHERE run_id=? AND table_name=?', [$run, $name]);
+                $cursor = $this->store->one('SELECT expected,status,failed FROM whmcstofossbilling_cursor WHERE run_id=? AND table_name=?', [$run, $name]);
                 if (!$cursor || (int) $cursor['expected'] > 0 || (int) $cursor['failed'] > 0) throw new SafeException('Source allocation tables require a reviewed allocation adapter. A transaction was not incorrectly assigned wholly to one invoice.');
             }
         }

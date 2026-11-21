@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Destination;
+namespace Box\Mod\Whmcstofossbilling\Destination;
 
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 final class Store
 {
@@ -40,7 +40,7 @@ final class Store
 
     public function source(int $id): array
     {
-        return $this->one('SELECT * FROM whmcsmigrator_source WHERE id = ?', [$id]) ?? throw new SafeException('Source profile not found.');
+        return $this->one('SELECT * FROM whmcstofossbilling_source WHERE id = ?', [$id]) ?? throw new SafeException('Source profile not found.');
     }
 
     public function run(string $id): array
@@ -49,15 +49,15 @@ final class Store
             throw new SafeException('Invalid migration run identifier.');
         }
 
-        return $this->one('SELECT * FROM whmcsmigrator_run WHERE id = ?', [$id]) ?? throw new SafeException('Migration run not found.');
+        return $this->one('SELECT * FROM whmcstofossbilling_run WHERE id = ?', [$id]) ?? throw new SafeException('Migration run not found.');
     }
 
     public function schemaReady(): bool
     {
         $required = ['price', 'archive_link', 'snapshot', 'snapshot_link', 'assessment', 'reconcile_state', 'reconcile_total', 'credit_state', 'credit_result', 'legacy_reference'];
-        $rows = $this->all('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (' . implode(',', array_fill(0, count($required), '?')) . ')', array_map(static fn (string $name): string => 'whmcsmigrator_' . $name, $required));
+        $rows = $this->all('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (' . implode(',', array_fill(0, count($required), '?')) . ')', array_map(static fn (string $name): string => 'whmcstofossbilling_' . $name, $required));
         $names = array_column($rows, 'TABLE_NAME');
-        foreach ($required as $name) if (!in_array('whmcsmigrator_' . $name, $names, true)) return false;
+        foreach ($required as $name) if (!in_array('whmcstofossbilling_' . $name, $names, true)) return false;
 
         return true;
     }
@@ -95,7 +95,7 @@ final class Store
             }
         }
         $columns = $this->all('SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME, ORDINAL_POSITION');
-        $columns = array_values(array_filter($columns, static fn (array $r): bool => !str_starts_with($r['TABLE_NAME'], 'whmcsmigrator_')));
+        $columns = array_values(array_filter($columns, static fn (array $r): bool => !str_starts_with($r['TABLE_NAME'], 'whmcstofossbilling_')));
 
         return ['tables' => $required, 'fingerprint' => hash('sha256', self::json($columns))];
     }

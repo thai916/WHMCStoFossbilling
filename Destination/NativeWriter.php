@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Destination;
+namespace Box\Mod\Whmcstofossbilling\Destination;
 
-use Box\Mod\Whmcsmigrator\Archive\Sanitizer;
-use Box\Mod\Whmcsmigrator\Finance\Decimal;
-use Box\Mod\Whmcsmigrator\Mapping\Profile;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Archive\Sanitizer;
+use Box\Mod\Whmcstofossbilling\Finance\Decimal;
+use Box\Mod\Whmcstofossbilling\Mapping\Profile;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 /**
  * Historical persistence deliberately bypasses eventful lifecycle APIs.
@@ -37,7 +37,7 @@ final class NativeWriter
     {
         $this->dateFallbackOriginal = null;
         $used = false;
-        $date = \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc($value, $this->timezone, $this->invalidDateFallback, $used);
+        $date = \Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc($value, $this->timezone, $this->invalidDateFallback, $used);
         if ($used && is_string($value)) $this->dateFallbackOriginal = $value;
 
         return $date;
@@ -86,7 +86,7 @@ final class NativeWriter
         }
         $entity = self::ENTITIES[$suffix];
         $key = (string) $row['id'];
-        $previous = $this->store->one('SELECT * FROM whmcsmigrator_identity WHERE source_id=? AND table_name=? AND source_key=? AND destination_entity=?', [$this->source, $this->prefix . $suffix, $key, $entity]);
+        $previous = $this->store->one('SELECT * FROM whmcstofossbilling_identity WHERE source_id=? AND table_name=? AND source_key=? AND destination_entity=?', [$this->source, $this->prefix . $suffix, $key, $entity]);
         if ($previous !== null) {
             if ($previous['checksum'] !== $checksum) {
                 throw new SafeException('Source record changed after its native import. Destination preserved; a reviewed field-update workflow is required.');
@@ -112,7 +112,7 @@ final class NativeWriter
             $id = $this->insert($entity, $data);
         }
         $current = $this->store->one('SELECT * FROM `' . $entity . '` WHERE id=?', [$id]);
-        $this->store->execute('INSERT INTO whmcsmigrator_identity (source_id,table_name,source_key,destination_entity,destination_id,checksum,destination_checksum,run_id,created_at) VALUES (?,?,?,?,?,?,?,?,UTC_TIMESTAMP())', [$this->source, $this->prefix . $suffix, $key, $entity, $id, $checksum, hash('sha256', Store::json($current)), $run]);
+        $this->store->execute('INSERT INTO whmcstofossbilling_identity (source_id,table_name,source_key,destination_entity,destination_id,checksum,destination_checksum,run_id,created_at) VALUES (?,?,?,?,?,?,?,?,UTC_TIMESTAMP())', [$this->source, $this->prefix . $suffix, $key, $entity, $id, $checksum, hash('sha256', Store::json($current)), $run]);
         $status = $linked ? 'skipped' : 'imported';
 
         return $status === 'imported' && $this->dateFallbackOriginal !== null ? 'date_fallback' : $status;
@@ -130,7 +130,7 @@ final class NativeWriter
             throw new SafeException('Client email mapping is missing or invalid.');
         }
         if ($this->store->one('SELECT id FROM client WHERE email=?', [mb_strtolower(trim($email))])) {
-            $map = $this->store->one('SELECT id FROM whmcsmigrator_identity WHERE source_id=? AND table_name=? AND source_key=? AND destination_entity=?', [$this->source, $this->prefix . 'clients', (string) $row['id'], 'client']);
+            $map = $this->store->one('SELECT id FROM whmcstofossbilling_identity WHERE source_id=? AND table_name=? AND source_key=? AND destination_entity=?', [$this->source, $this->prefix . 'clients', (string) $row['id'], 'client']);
             if (!$map) {
                 throw new SafeException('Client email conflicts with an existing destination account. No automatic link or merge is allowed.');
             }
@@ -188,7 +188,7 @@ final class NativeWriter
 
     private function resolve(string $suffix, string $key): int
     {
-        $mapping = $this->store->one('SELECT destination_id FROM whmcsmigrator_identity WHERE source_id=? AND table_name=? AND source_key=? AND destination_entity=?', [$this->source, $this->prefix . $suffix, $key, self::ENTITIES[$suffix]]);
+        $mapping = $this->store->one('SELECT destination_id FROM whmcstofossbilling_identity WHERE source_id=? AND table_name=? AND source_key=? AND destination_entity=?', [$this->source, $this->prefix . $suffix, $key, self::ENTITIES[$suffix]]);
         if (!$mapping || !$mapping['destination_id']) {
             throw new SafeException('A required destination relationship has not been imported. Include dependencies or retry after resolving them.');
         }

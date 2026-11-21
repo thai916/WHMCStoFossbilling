@@ -33,7 +33,7 @@ function rejects(callable $operation, string $message): void
     $rejected = false;
     try {
         $operation();
-    } catch (\Box\Mod\Whmcsmigrator\Security\SafeException) {
+    } catch (\Box\Mod\Whmcstofossbilling\Security\SafeException) {
         $rejected = true;
     }
     expect($rejected, $message);

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Source;
+namespace Box\Mod\Whmcstofossbilling\Source;
 
 /** Only fixed messages leave this classifier; never return the original error. */
 final class ConnectionDiagnostics

@@ -6,11 +6,11 @@ Run these from the FOSSBilling root using the PHP executable that serves the app
 
 ```powershell
 $php = 'D:\Laragon\bin\php\php-8.4.28-Win32-vs17-x64\php.exe'
-& $php modules/Whmcsmigrator/tests/unit.php
-& $php modules/Whmcsmigrator/tests/grants.php
-& $php modules/Whmcsmigrator/tests/security.php
-& $php modules/Whmcsmigrator/tests/render.php
-& $php modules/Whmcsmigrator/tests/integration.php --disposable-databases
+& $php modules/Whmcstofossbilling/tests/unit.php
+& $php modules/Whmcstofossbilling/tests/grants.php
+& $php modules/Whmcstofossbilling/tests/security.php
+& $php modules/Whmcstofossbilling/tests/render.php
+& $php modules/Whmcstofossbilling/tests/integration.php --disposable-databases
 ```
 
 The integration test:
@@ -30,7 +30,7 @@ It needs a local DBA account allowed to create disposable databases/users. If th
 
 ```powershell
 $env:WM_MYSQLD = 'D:\Laragon\bin\mysql\mysql8.0.31\bin\mysqld.exe'
-& $php modules/Whmcsmigrator/tests/connection.php --disposable-server
+& $php modules/Whmcstofossbilling/tests/connection.php --disposable-server
 ```
 
 This separate suite initializes its **own** MySQL 8 datadir on a randomly allocated
@@ -77,10 +77,10 @@ Node/Playwright may be installed as development-only tools under `.local/`, with
 
 ```powershell
 $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
-npm --prefix modules/Whmcsmigrator/.local/browser --cache modules/Whmcsmigrator/.local/npm-cache install playwright --ignore-scripts --no-audit --no-fund
+npm --prefix modules/Whmcstofossbilling/.local/browser --cache modules/Whmcstofossbilling/.local/npm-cache install playwright --ignore-scripts --no-audit --no-fund
 $env:WM_PHP = $php
 $env:WM_CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
-node modules/Whmcsmigrator/tests/browser.cjs
+node modules/Whmcstofossbilling/tests/browser.cjs
 ```
 
 The harness uses a synthetic API, the real extension Twig template/JS/CSS, the installed admin stylesheets and a minimal test-only layout. It verifies the standard no-TLS default plus all three explicitly selected security modes, required risk confirmations, conditional CA fields, actual-state success display in dark green, the required WHMCS timezone dropdown defaulting to America/Chicago and submitted with the connection test, and no separate timezone-inspection/override request. It also covers the existing IP controls, mapping/exclusions, preview/start separation, a missing-`crypto.randomUUID` fallback that still submits a valid 32-hex batch idempotency key, the opt-in invalid-date policy, a top percentage bar that tracks scanned/expected records across steps, schema-upgrade confirmation, legacy search, financial discrepancies/missing values, safe text rendering, no browser storage and desktop/mobile layout. API responses are synthetic, not real admin writes, MySQL handshakes or external lookups. Clipboard wiring does not change the user's clipboard.
@@ -132,7 +132,7 @@ These are synthetic assertions, not evidence of a live-source or whole-billing-s
 The local pre-development SHA-256 baseline is private under `.local/core-baseline.json` and is never committed. Run:
 
 ```powershell
-& $php modules/Whmcsmigrator/tests/integrity.php
+& $php modules/Whmcstofossbilling/tests/integrity.php
 ```
 
 The checker compares every baseline file and detects new files outside the module. Only administrator-approved `data/cache/` and `data/log/` runtime changes are separated from unauthorized changes. Results are written inside `.local/`.
@@ -142,9 +142,9 @@ Without a pre-development baseline, the script refuses to claim unchanged files.
 ## Latest local verification — 2026-11-21
 
 - PHP syntax checks and JavaScript syntax checks passed.
-- Current local changes replacing the 0.2 artifact: grant syntax/inspection 77 assertions; unit 98; endpoint security 25; render/module discovery 12; disposable migration integration 188; disposable TLS/connection server 20 — 420 assertions total.
-- All 46 PHP files and both JavaScript files pass syntax checks. Connection policy, actual encryption/identity, cPanel grant recognition, query-log read-only enforcement, administrator-selected timezone snapshots, client DATETIME conversion/date-only preservation, strict-versus-opt-in invalid-date handling and existing migration regressions pass.
-- Expanded synthetic browser tests passed, including the missing-`crypto.randomUUID` fallback, the opt-in invalid-date policy and the top scanned/expected percentage bar, as did the actual unauthenticated local login gate. Authenticated real-admin end-to-end verification remains pending.
+- Current local changes replacing the 0.2 artifact: grant syntax/inspection 77 assertions; unit 98; endpoint security 25; render/module discovery 12; disposable migration integration 190; disposable TLS/connection server 20 — 422 assertions total.
+- All 46 PHP files and both JavaScript files pass syntax checks. Connection policy, actual encryption/identity, cPanel grant recognition, query-log read-only enforcement, administrator-selected timezone snapshots, client DATETIME conversion/date-only preservation, strict-versus-opt-in invalid-date handling, module rename discovery and legacy extension-table migration pass.
+- Expanded synthetic browser tests passed with the renamed admin route/API path, including the missing-`crypto.randomUUID` fallback, the opt-in invalid-date policy and the top scanned/expected percentage bar, as did the actual unauthenticated local login gate. Authenticated real-admin end-to-end verification remains pending.
 - Integrity checked 8,100 baseline files but **did not pass**: `config.php` differs and `config.old.php` exists outside the extension. Both were left untouched; their origin is not established by the checker. Approved cache/log changes are separately listed in `.local/integrity-result.json`. Do not describe this result as zero external changes or reset the baseline to conceal the differences.
 - Bundled CA certificates parse as real X.509 certificates, and the downloaded file SHA-256 matches the HTTPS upstream checksum. A separate explicitly requested CLI public-IP lookup succeeded over verified HTTPS; this does not prove remote MySQL TLS compatibility.
 - Local HTTP checks: supplied public icon returns 200/image/png; direct manifest, CA bundle and private baseline requests return 403.

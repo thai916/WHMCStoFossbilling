@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Source;
+namespace Box\Mod\Whmcstofossbilling\Source;
 
-use Box\Mod\Whmcsmigrator\Security\SafeException;
-use Box\Mod\Whmcsmigrator\Security\Sensitive;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Security\Sensitive;
 
 /** No caller-supplied SQL, source writes, locking reads, routines or session SET commands. */
 final class Reader

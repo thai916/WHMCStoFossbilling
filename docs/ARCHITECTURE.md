@@ -2,7 +2,7 @@
 
 ## Verified target
 
-The local authoritative installation declares FOSSBilling 0.8.9. It uses a mixed Doctrine ORM/DBAL and legacy RedBean model. The extension follows its `Box\Mod\Whmcsmigrator` namespace, manifest discovery, `Service::install()`, admin controller/navigation and admin API conventions.
+The local authoritative installation declares FOSSBilling 0.8.9. It uses a mixed Doctrine ORM/DBAL and legacy RedBean model. The extension follows its `Box\Mod\Whmcstofossbilling` namespace, manifest discovery, `Service::install()`, admin controller/navigation and admin API conventions.
 
 `vendor/composer/autoload_psr4.php` already maps `Box\Mod\` to `modules/`. No autoloader or dependency changes are required.
 
@@ -26,7 +26,7 @@ The local installed requirements demand PHP 8.3+. Laragon Apache configuration p
 
 ## Extension tables
 
-All names start with `whmcsmigrator_`:
+All names start with `whmcstofossbilling_`:
 
 - `source`: connection fingerprint, GCM-encrypted options, schema and mapping profile.
 - `analysis`: per-table count/high-water key and schema checksum; analysis expires after an hour.

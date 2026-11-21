@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 
-use Box\Mod\Whmcsmigrator\Security\SafeException;
-use Box\Mod\Whmcsmigrator\Source\GrantPolicy;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Source\GrantPolicy;
 
 $usage = "GRANT USAGE ON *.* TO 'fixture_reader'@'198.51.100.27'";
 $accepted = [

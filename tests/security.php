@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 
-use Box\Mod\Whmcsmigrator\Api\Admin;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Api\Admin;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 use Symfony\Component\HttpFoundation\Request;
 
 if (!defined('SYSTEM_URL')) define('SYSTEM_URL', 'http://fossbill.test/');
@@ -48,7 +48,7 @@ $denied = static function (callable $operation, string $label): void {
     }
 };
 foreach (['dashboard', 'schema_upgrade', 'public_ip', 'test_connection', 'timezone_confirm', 'mapping_get', 'mapping_save', 'analyze_table', 'run_create', 'run_status', 'run_control', 'run_batch', 'run_retry', 'archive_search', 'report_export'] as $endpoint) {
-    $request = Request::create(SYSTEM_URL . 'api/admin/whmcsmigrator/' . $endpoint, 'POST');
+    $request = Request::create(SYSTEM_URL . 'api/admin/whmcstofossbilling/' . $endpoint, 'POST');
     $denied(fn () => $newApi($request)->{$endpoint}([]), $endpoint . ' rejects missing CSRF before service execution');
 }
 $request = Request::create(SYSTEM_URL, 'GET', [], [], [], ['HTTP_X_CSRF_TOKEN' => 'test-session-csrf']);

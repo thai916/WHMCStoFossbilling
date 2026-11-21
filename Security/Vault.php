@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Security;
+namespace Box\Mod\Whmcstofossbilling\Security;
 
 final class Vault
 {
@@ -13,6 +13,7 @@ final class Vault
         if (strlen($installationSecret) < 16) {
             throw new SafeException('The destination installation secret is not suitable for credential storage.');
         }
+        // Stable crypto domain from the pre-rename release: changing it would make stored source credentials unopenable.
         $this->key = hash_hkdf('sha256', $installationSecret, 32, 'whmcsmigrator-v1');
     }
 

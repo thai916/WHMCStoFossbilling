@@ -56,6 +56,6 @@ The requested complete WHMCS 8.x migration is not finished. Do not interpret the
 
 ## Publication gate
 
-The user subsequently explicitly requested committing and creating public repository `thai916/Whmcsmigrator`. Publication is permitted as an **experimental development preview**, not as the originally requested production-complete migration. Tag/release `0.1` must be marked as a prerelease and retain the incomplete-scope warning. See [release notes](RELEASE-0.1.md). Production acceptance criteria above remain unmet regardless of repository/release existence.
+The user subsequently explicitly requested committing and creating public repository `thai916/Whmcstofossbilling`. Publication is permitted as an **experimental development preview**, not as the originally requested production-complete migration. Tag/release `0.1` must be marked as a prerelease and retain the incomplete-scope warning. See [release notes](RELEASE-0.1.md). Production acceptance criteria above remain unmet regardless of repository/release existence.
 
 The overwritten 0.2 connection-bug-fix artifact is likewise explicitly authorized as an experimental prerelease. Its standard-by-default TLS policy, cPanel grant recognition and administrator-selected timezone do not resolve the production blockers above. See [0.2 notes](RELEASE-0.2.md).

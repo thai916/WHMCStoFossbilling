@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 
-use Box\Mod\Whmcsmigrator\Destination\Store;
-use Box\Mod\Whmcsmigrator\Installation\Schema;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
-use Box\Mod\Whmcsmigrator\Service;
-use Box\Mod\Whmcsmigrator\Source\Reader;
+use Box\Mod\Whmcstofossbilling\Destination\Store;
+use Box\Mod\Whmcstofossbilling\Installation\Schema;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Service;
+use Box\Mod\Whmcstofossbilling\Source\Reader;
 
 if (!in_array('--disposable-databases', $argv, true)) {
     exit("Explicit --disposable-databases flag required. Creates and removes uniquely named local test databases/accounts; never accepts live source credentials.\n");
@@ -131,10 +131,16 @@ try {
     };
     $service = new Service();
     $service->setDi($di);
+    $destination->exec('CREATE TABLE `whmcsmigrator_source` (legacy_probe INT NULL)');
+    expect($service->install(), 'Legacy extension tables are renamed into the new module namespace without touching core schema');
+    expect((int) $destination->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='whmcsmigrator_source'")->fetchColumn() === 0
+        && (int) $destination->query("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='whmcstofossbilling_source'")->fetchColumn() === 1
+        && $destination->query("SHOW COLUMNS FROM `whmcstofossbilling_source` LIKE 'legacy_probe'")->fetch() !== false, 'Extension-owned legacy data survives the module rename');
+    $destination->exec('DROP TABLE `whmcstofossbilling_source`');
     expect($service->install() && $service->install(), 'Install and repeat install succeed without core changes');
     if (!defined('PATH_MODS')) define('PATH_MODS', dirname(__DIR__, 2));
     $di['filesystem'] = new \Symfony\Component\Filesystem\Filesystem();
-    $nativeModule = new \FOSSBilling\Module('whmcsmigrator');
+    $nativeModule = new \FOSSBilling\Module('whmcstofossbilling');
     $nativeModule->setDi($di);
     expect($nativeModule->install() && $service->store()->schemaReady(), 'Native FOSSBilling module installer creates the extension schema in the disposable destination');
     $options = ['host' => $fixtureHost, 'port' => $db['port'] ?? 3306, 'database' => $sourceDb, 'username' => $user, 'password' => $password, 'prefix' => 'tbl', 'timeout' => 3, 'security_mode' => 'standard', 'security_acknowledged' => true, 'source_timezone' => 'UTC'];
@@ -160,7 +166,7 @@ try {
             $service->testConnection(array_replace($options, $invalid));
             expect(false, 'Invalid fixture connection must fail');
         } catch (PDOException|SafeException $error) {
-            expect(!str_contains(\Box\Mod\Whmcsmigrator\Security\Sensitive::error($error), 'incorrect-fixture-password'), 'Connection failure is safely classified without credentials');
+            expect(!str_contains(\Box\Mod\Whmcstofossbilling\Security\Sensitive::error($error), 'incorrect-fixture-password'), 'Connection failure is safely classified without credentials');
         }
     }
     rejects(fn () => $service->testConnection(array_replace($options, ['username' => $db['user'], 'password' => $db['password']])), 'Overprivileged local account refused as source reader');
@@ -192,7 +198,7 @@ try {
     expect($dryPlan['source_security_mode'] === 'standard' && $dryPlan['source_timezone'] === 'UTC' && $dryPlan['source_timezone_evidence']['confidence'] === 'administrator_verified', 'Run plans freeze source security mode and verified timezone evidence');
     expect($dryPlan['invalid_date_fallback'] === null, 'Historical dates stay strict unless the 1900 fallback is explicitly selected');
     $fallbackPreview = $service->createRun($runInput + ['mode' => 'dry_run', 'invalid_date_fallback' => '1900'], 1);
-    expect(json_decode($service->store()->run($fallbackPreview['id'])['plan_json'], true, 128, JSON_THROW_ON_ERROR)['invalid_date_fallback'] === \Box\Mod\Whmcsmigrator\Destination\NativeWriter::DATE_FALLBACK, 'Opt-in preview freezes the explicit 1900 policy in its plan');
+    expect(json_decode($service->store()->run($fallbackPreview['id'])['plan_json'], true, 128, JSON_THROW_ON_ERROR)['invalid_date_fallback'] === \Box\Mod\Whmcstofossbilling\Destination\NativeWriter::DATE_FALLBACK, 'Opt-in preview freezes the explicit 1900 policy in its plan');
     $service->confirmSourceTimezone($profile['source_id'], 'Asia/Kolkata');
     expect(json_decode($service->store()->run($dry['id'])['plan_json'], true, 128, JSON_THROW_ON_ERROR)['source_timezone'] === 'UTC', 'A later profile timezone override cannot rewrite an already-authorized run snapshot');
     $service->confirmSourceTimezone($profile['source_id'], 'UTC');
@@ -207,10 +213,10 @@ try {
     expect($result['status'] === 'preview_finished', 'Dry run finishes without claiming insertion');
     $store = $service->store();
     $clientTimestamp = ['id' => 999, 'email' => 'timestamp-fixture@example.invalid', 'datecreated' => '2010-01-01 05:30:00'];
-    $clientRules = \Box\Mod\Whmcsmigrator\Mapping\Profile::defaults($profile['schema'])['fields']['tblclients'];
-    rejects(fn () => (new \Box\Mod\Whmcsmigrator\Destination\NativeWriter($store, $profile['source_id'], 'tbl'))->validateClientPreview($clientTimestamp, $clientRules), 'Client DATETIME registrations cannot silently assume UTC when the source timezone is unresolved');
+    $clientRules = \Box\Mod\Whmcstofossbilling\Mapping\Profile::defaults($profile['schema'])['fields']['tblclients'];
+    rejects(fn () => (new \Box\Mod\Whmcstofossbilling\Destination\NativeWriter($store, $profile['source_id'], 'tbl'))->validateClientPreview($clientTimestamp, $clientRules), 'Client DATETIME registrations cannot silently assume UTC when the source timezone is unresolved');
     expect((int) $store->one('SELECT COUNT(*) AS n FROM client')['n'] === 0, 'Dry run creates no destination clients');
-    expect((int) $store->one('SELECT COUNT(*) AS n FROM whmcsmigrator_archive')['n'] === 0, 'Dry run creates no historical archive records');
+    expect((int) $store->one('SELECT COUNT(*) AS n FROM whmcstofossbilling_archive')['n'] === 0, 'Dry run creates no historical archive records');
     $advancedPreview = $service->createRun($runInput + ['mode' => 'dry_run', 'target_mode' => 'historical_native'], 1);
     $service->control($advancedPreview['id'], 'resume');
     do {
@@ -218,7 +224,7 @@ try {
     } while ($previewResult['status'] === 'running');
     $previewErrors = $service->status($advancedPreview['id'])['errors'];
     expect($previewResult['status'] === 'requires_action' && in_array('tblinvoices', array_column($previewErrors, 'table_name'), true) && in_array('tblhosting', array_column($previewErrors, 'table_name'), true), 'Historical-target dry run identifies unsafe invoice and hosting eligibility before publication');
-    expect((int) $store->one('SELECT COUNT(*) AS n FROM client')['n'] === 0 && (int) $store->one('SELECT COUNT(*) AS n FROM whmcsmigrator_snapshot')['n'] === 0, 'Advanced dry-run validation creates neither business records nor preserved-history snapshots');
+    expect((int) $store->one('SELECT COUNT(*) AS n FROM client')['n'] === 0 && (int) $store->one('SELECT COUNT(*) AS n FROM whmcstofossbilling_snapshot')['n'] === 0, 'Advanced dry-run validation creates neither business records nor preserved-history snapshots');
     $authorized = $runInput + ['mode' => 'reference_native', 'confirmation' => 'PRESERVE HISTORY', 'backup_verified' => true, 'backup_reference' => 'disposable fixture snapshot', 'accept_limitations' => true, 'destination_exclusive' => true];
     $run = $service->createRun($authorized, 1);
     rejects(fn () => $service->createRun($authorized, 1), 'A source cannot have overlapping unfinished non-preview runs');
@@ -248,7 +254,7 @@ try {
         $timestampRow['datecreated'] = $registration;
         $store->pdo->beginTransaction();
         try {
-            $writer = new \Box\Mod\Whmcsmigrator\Destination\NativeWriter($store, $profile['source_id'], 'tbl', 'Asia/Kolkata');
+            $writer = new \Box\Mod\Whmcstofossbilling\Destination\NativeWriter($store, $profile['source_id'], 'tbl', 'Asia/Kolkata');
             $writer->import('clients', $timestampRow, $clientRules, hash('sha256', Store::json($timestampRow)), $run['id']);
             expect($store->one('SELECT created_at FROM client WHERE aid=?', ['whmcs:' . $profile['source_id'] . ':999'])['created_at'] === '2010-01-01 00:00:00', 'Native client adapter correctly handles ' . $registration . ' as ' . (strlen($registration) === 10 ? 'an unchanged calendar date' : 'a converted application timestamp'));
         } finally {
@@ -256,18 +262,18 @@ try {
         }
     }
     $zeroDateRow = ['id' => 998, 'email' => 'zero-date-fixture@example.invalid', 'datecreated' => '0000-00-00'] + array_diff_key($timestampRow, ['id' => true, 'email' => true, 'datecreated' => true]);
-    rejects(fn () => (new \Box\Mod\Whmcsmigrator\Destination\NativeWriter($store, $profile['source_id'], 'tbl'))->import('clients', $zeroDateRow, $clientRules, hash('sha256', Store::json($zeroDateRow)), $run['id']), 'Strict writer still refuses invalid client registration dates');
-    $fallbackWriter = new \Box\Mod\Whmcsmigrator\Destination\NativeWriter($store, $profile['source_id'], 'tbl', 'UTC', \Box\Mod\Whmcsmigrator\Destination\NativeWriter::DATE_FALLBACK);
+    rejects(fn () => (new \Box\Mod\Whmcstofossbilling\Destination\NativeWriter($store, $profile['source_id'], 'tbl'))->import('clients', $zeroDateRow, $clientRules, hash('sha256', Store::json($zeroDateRow)), $run['id']), 'Strict writer still refuses invalid client registration dates');
+    $fallbackWriter = new \Box\Mod\Whmcstofossbilling\Destination\NativeWriter($store, $profile['source_id'], 'tbl', 'UTC', \Box\Mod\Whmcstofossbilling\Destination\NativeWriter::DATE_FALLBACK);
     $store->pdo->beginTransaction();
     try {
         expect($fallbackWriter->import('clients', $zeroDateRow, $clientRules, hash('sha256', Store::json($zeroDateRow)), $run['id']) === 'date_fallback', 'Opt-in writer reports a date substitution instead of a failure');
         expect($fallbackWriter->dateFallbackOriginal() === '0000-00-00', 'Original invalid value remains available for the audit record');
-        expect($store->one('SELECT created_at FROM client WHERE aid=?', ['whmcs:' . $profile['source_id'] . ':998'])['created_at'] === \Box\Mod\Whmcsmigrator\Destination\NativeWriter::DATE_FALLBACK, 'Invalid client registration date imports with the explicit 1900 sentinel');
+        expect($store->one('SELECT created_at FROM client WHERE aid=?', ['whmcs:' . $profile['source_id'] . ':998'])['created_at'] === \Box\Mod\Whmcstofossbilling\Destination\NativeWriter::DATE_FALLBACK, 'Invalid client registration date imports with the explicit 1900 sentinel');
     } finally {
         $store->pdo->rollBack();
     }
     expect((int) $store->one("SELECT COUNT(*) AS n FROM product WHERE active=0 AND hidden=1 AND setup='manual'")['n'] === 4, 'Products and add-ons remain disabled, hidden and manually provisioned');
-    $productId = $store->one("SELECT destination_id FROM whmcsmigrator_identity WHERE source_id=? AND table_name='tblproducts' AND source_key='1' AND destination_entity='product'", [$profile['source_id']])['destination_id'];
+    $productId = $store->one("SELECT destination_id FROM whmcstofossbilling_identity WHERE source_id=? AND table_name='tblproducts' AND source_key='1' AND destination_entity='product'", [$profile['source_id']])['destination_id'];
     $product = $store->one('SELECT * FROM product WHERE id=?', [$productId]);
     $payment = $store->one('SELECT * FROM product_payment WHERE id=?', [$product['product_payment_id']]);
     expect($payment['m_price'] === '10.00' && $payment['q_price'] === '27.00' && $payment['a_price'] === '100.00' && $payment['bia_price'] === '180.00' && $payment['tria_price'] === '250.00', 'Native base-currency recurring cycle prices imported exactly');
@@ -277,7 +283,7 @@ try {
     $plan = $store->one('SELECT * FROM service_hosting_hp WHERE id=?', [$config['hosting_plan_id']]);
     expect($plan['name'] === 'legacy_plan' && $server['manager'] === 'Whm', 'Explicit hosting package and unambiguous product/server group relationship imported');
     expect((int) $server['active'] === 0 && $server['username'] === null && $server['password'] === null && $server['accesshash'] === null, 'Server metadata has no usable credentials and remains inactive');
-    $eur = $store->one("SELECT * FROM whmcsmigrator_price WHERE product_id=? AND currency='EUR'", [$productId]);
+    $eur = $store->one("SELECT * FROM whmcstofossbilling_price WHERE product_id=? AND currency='EUR'", [$productId]);
     expect((int) $eur['native_applied'] === 0 && json_decode($eur['prices_json'], true)['1M']['amount'] === '9.00', 'Independent EUR price matrix preserved without replacing native USD prices');
     $addon = $store->one('SELECT * FROM product WHERE is_addon=1');
     $addonPayment = $store->one('SELECT * FROM product_payment WHERE id=?', [$addon['product_payment_id']]);
@@ -294,11 +300,11 @@ try {
     foreach (['invoice', 'transaction', 'client_balance', 'client_order', 'service_hosting', 'service_domain'] as $table) {
         expect((int) $store->one("SELECT COUNT(*) AS n FROM `$table`")['n'] === 0, $table . ' unsafe native category remains untouched');
     }
-    $archives = $store->all('SELECT payload FROM whmcsmigrator_archive');
+    $archives = $store->all('SELECT payload FROM whmcstofossbilling_archive');
     expect(!str_contains(Store::json($archives), '"password":"DO_NOT_EXTRACT"') && !str_contains(Store::json($archives), 'DO_NOT_ARCHIVE'), 'Excluded secrets and recognized free-text credentials are not retained');
-    $invoice = $store->one("SELECT payload FROM whmcsmigrator_archive WHERE table_name='tblinvoices' AND source_key='1'");
+    $invoice = $store->one("SELECT payload FROM whmcstofossbilling_archive WHERE table_name='tblinvoices' AND source_key='1'");
     expect(json_decode($invoice['payload'], true)['total'] === '115.00', 'Exact historical invoice amount retained in archive');
-    $payment = $store->one("SELECT payload FROM whmcsmigrator_archive WHERE table_name='tblaccounts' AND source_key='1'");
+    $payment = $store->one("SELECT payload FROM whmcstofossbilling_archive WHERE table_name='tblaccounts' AND source_key='1'");
     expect(json_decode($payment['payload'], true)['date'] === '2010-01-05 12:00:00', 'Original payment date retained');
     $second = $service->createRun($authorized, 1);
     $service->control($second['id'], 'resume');
@@ -311,7 +317,7 @@ try {
     expect(array_sum(array_column($repeated['categories'], 'archived')) === 0, 'Unchanged archived rows are skipped on repeated imports');
     // Exporters contain identities and counts, not source payloads, emails or passwords.
     ob_start();
-    (new \Box\Mod\Whmcsmigrator\Report\Exporter($service))->response($run['id'], 'json')->sendContent();
+    (new \Box\Mod\Whmcstofossbilling\Report\Exporter($service))->response($run['id'], 'json')->sendContent();
     $export = ob_get_clean();
     expect(!str_contains($export, 'ada@example.invalid') && !str_contains($export, 'DO_NOT_'), 'JSON reports omit private payloads and secrets');
     expect(count(json_decode($export, true, 128, JSON_THROW_ON_ERROR)['records']) > 0, 'JSON report contains actual per-record dispositions');
@@ -341,8 +347,8 @@ try {
     expect($store->one('SELECT MIN(created_at) AS first FROM client_balance')['first'] === '2009-12-01 00:00:00', 'Credit ledger retains original transaction dates');
     $balances = array_column($assessment['totals_by_currency']['balance'], null, 'currency');
     expect($balances['USD']['source_total'] === '30.00' && $balances['USD']['native_total'] === '25.00', 'USD closing-balance discrepancy is reported without forcing an adjustment');
-    $creditFailure = $store->one("SELECT * FROM whmcsmigrator_credit_result WHERE run_id=? AND source_key='3'", [$financial['id']]);
-    expect($creditFailure['status'] === 'failed' && (int) $store->one("SELECT COUNT(*) AS n FROM client_balance WHERE client_id=(SELECT destination_id FROM whmcsmigrator_identity WHERE source_id=? AND table_name='tblclients' AND source_key='3' AND destination_entity='client')", [$profile['source_id']])['n'] === 0, 'Mismatched source credit history publishes no partial ledger or artificial opening balance');
+    $creditFailure = $store->one("SELECT * FROM whmcstofossbilling_credit_result WHERE run_id=? AND source_key='3'", [$financial['id']]);
+    expect($creditFailure['status'] === 'failed' && (int) $store->one("SELECT COUNT(*) AS n FROM client_balance WHERE client_id=(SELECT destination_id FROM whmcstofossbilling_identity WHERE source_id=? AND table_name='tblclients' AND source_key='3' AND destination_entity='client')", [$profile['source_id']])['n'] === 0, 'Mismatched source credit history publishes no partial ledger or artificial opening balance');
     expect((int) $store->one('SELECT COUNT(*) AS n FROM transaction WHERE invoice_id=?', [$invoice['id']])['n'] === 3, 'Multiple partial payments and a refund link to the same historical invoice');
     $paymentTotals = array_column($assessment['totals_by_currency']['received'], null, 'currency');
     $refundTotals = array_column($assessment['totals_by_currency']['refunded'], null, 'currency');
@@ -381,7 +387,7 @@ try {
     if (PHP_VERSION_ID >= 80400) $ormConfig->enableNativeLazyObjects(true);
     else {
         $ormConfig->setProxyDir(dirname(__DIR__) . '/.local/doctrine-proxies');
-        $ormConfig->setProxyNamespace('WhmcsmigratorTestProxies');
+        $ormConfig->setProxyNamespace('WhmcstofossbillingTestProxies');
     }
     $dbal = \Doctrine\DBAL\DriverManager::getConnection(['driver' => 'pdo_mysql', 'host' => $fixtureHost, 'port' => $db['port'] ?? 3306, 'dbname' => $destinationDb, 'user' => $db['user'], 'password' => $db['password'], 'charset' => 'utf8mb4']);
     $em = new \Doctrine\ORM\EntityManager($dbal, $ormConfig);
@@ -397,13 +403,13 @@ try {
     $destination->beginTransaction();
     try {
         $store->execute('UPDATE product_payment SET m_price=? WHERE id=?', ['999.00', $product['product_payment_id']]);
-        $sourceProduct = $store->one("SELECT payload,checksum FROM whmcsmigrator_snapshot WHERE run_id=? AND table_name='tblproducts' AND source_key='1'", [$financialAgain['id']]);
-        rejects(fn () => (new \Box\Mod\Whmcsmigrator\Destination\ProductImporter($store, $profile['source_id'], 'tbl'))->import('products', json_decode($sourceProduct['payload'], true), $sourceProduct['checksum'], $financialAgain['id']), 'Manual destination pricing change is detected through aggregate child checksums');
+        $sourceProduct = $store->one("SELECT payload,checksum FROM whmcstofossbilling_snapshot WHERE run_id=? AND table_name='tblproducts' AND source_key='1'", [$financialAgain['id']]);
+        rejects(fn () => (new \Box\Mod\Whmcstofossbilling\Destination\ProductImporter($store, $profile['source_id'], 'tbl'))->import('products', json_decode($sourceProduct['payload'], true), $sourceProduct['checksum'], $financialAgain['id']), 'Manual destination pricing change is detected through aggregate child checksums');
     } finally {
         $destination->rollBack();
     }
     ob_start();
-    (new \Box\Mod\Whmcsmigrator\Report\Exporter($service))->response($financial['id'], 'csv')->sendContent();
+    (new \Box\Mod\Whmcstofossbilling\Report\Exporter($service))->response($financial['id'], 'csv')->sendContent();
     $csv = ob_get_clean();
     $csvRows = array_map(static fn (string $line): array => str_getcsv($line, ',', '"', ''), array_filter(explode("\n", trim($csv))));
     expect(count(array_unique(array_map('count', $csvRows))) === 1 && count($csvRows[0]) === 18 && str_contains($csv, 'financial_snapshot'), 'CSV reports have consistent columns and actual currency-specific assessment totals');
@@ -422,28 +428,28 @@ try {
     } while ($result['status'] === 'running');
     expect($result['status'] === 'requires_action', 'Changed native source row requires explicit review instead of overwrite');
     expect($store->one('SELECT first_name FROM client WHERE aid=?', ['whmcs:' . $profile['source_id'] . ':1'])['first_name'] === 'Ada', 'Existing native destination record preserved on source change');
-    expect((int) $store->one('SELECT COUNT(*) AS n FROM whmcsmigrator_archive_revision')['n'] === 1, 'Prior archive revision retained when source changes');
+    expect((int) $store->one('SELECT COUNT(*) AS n FROM whmcstofossbilling_archive_revision')['n'] === 1, 'Prior archive revision retained when source changes');
     for ($retry = 0; $retry < 5; ++$retry) $service->retry($incremental['id']);
-    $exception = $store->one("SELECT attempts FROM whmcsmigrator_attempt WHERE run_id=? AND table_name='tblclients' AND source_key='1'", [$incremental['id']]);
+    $exception = $store->one("SELECT attempts FROM whmcstofossbilling_attempt WHERE run_id=? AND table_name='tblclients' AND source_key='1'", [$incremental['id']]);
     expect((int) $exception['attempts'] === 5, 'Explicit failed-record retries are bounded to five total attempts');
     expect($sourceDigest() === $changedSource, 'Incremental scan/retry never changes the synthetic source');
-    $frozen = $store->one("SELECT payload FROM whmcsmigrator_snapshot WHERE run_id=? AND table_name='tblclients' AND source_key='1'", [$financial['id']]);
+    $frozen = $store->one("SELECT payload FROM whmcstofossbilling_snapshot WHERE run_id=? AND table_name='tblclients' AND source_key='1'", [$financial['id']]);
     expect(json_decode($frozen['payload'], true)['firstname'] === 'Ada', 'Per-run source snapshot survives later runs changing the latest archive');
     $beforeTotals = $service->status($financial['id'])['reconciliation']['totals_by_currency'];
-    $store->execute("UPDATE whmcsmigrator_reconcile_state SET after_id=0,status='scanning' WHERE run_id=?", [$financial['id']]);
-    $reconciler = new \Box\Mod\Whmcsmigrator\Finance\Reconciler($store);
+    $store->execute("UPDATE whmcstofossbilling_reconcile_state SET after_id=0,status='scanning' WHERE run_id=?", [$financial['id']]);
+    $reconciler = new \Box\Mod\Whmcstofossbilling\Finance\Reconciler($store);
     while (!$reconciler->batch($store->run($financial['id']), 2)) {}
     expect($reconciler->summary($financial['id'])['totals_by_currency'] === $beforeTotals, 'Restarting reconciliation neither mixes later source snapshots nor double-counts totals');
     $store->execute('UPDATE invoice SET currency=? WHERE id=?', ['USD', $invoice['id']]);
     try {
-        $store->execute("UPDATE whmcsmigrator_reconcile_state SET after_id=0,status='scanning' WHERE run_id=?", [$financial['id']]);
+        $store->execute("UPDATE whmcstofossbilling_reconcile_state SET after_id=0,status='scanning' WHERE run_id=?", [$financial['id']]);
         while (!$reconciler->batch($store->run($financial['id']), 2)) {}
-        $conflict = $store->one("SELECT status,native_metrics FROM whmcsmigrator_assessment WHERE run_id=? AND table_name='tblinvoices' AND source_key='3'", [$financial['id']]);
+        $conflict = $store->one("SELECT status,native_metrics FROM whmcstofossbilling_assessment WHERE run_id=? AND table_name='tblinvoices' AND source_key='3'", [$financial['id']]);
         $conflictTotals = array_column($reconciler->summary($financial['id'])['totals_by_currency']['invoice_value'], null, 'currency');
         expect($conflict['status'] === 'currency_conflict' && json_decode($conflict['native_metrics'], true)['_actual_currency'] === 'USD' && $conflictTotals['EUR']['native_total'] === null, 'Destination currency drift is reported and never mixed into the source currency bucket');
     } finally {
         $store->execute('UPDATE invoice SET currency=? WHERE id=?', ['EUR', $invoice['id']]);
-        $store->execute("UPDATE whmcsmigrator_reconcile_state SET after_id=0,status='scanning' WHERE run_id=?", [$financial['id']]);
+        $store->execute("UPDATE whmcstofossbilling_reconcile_state SET after_id=0,status='scanning' WHERE run_id=?", [$financial['id']]);
         while (!$reconciler->batch($store->run($financial['id']), 2)) {}
     }
     // Additional intentionally oversized SYNTHETIC source fixtures, created only
@@ -459,8 +465,8 @@ try {
     $largePage = $reader->page('tblnotes', $largeSchema['tblnotes'], '0', '2', 50);
     $oversized = $largePage['rows'][1];
     expect((int) $oversized['__wm_oversized'] === 1 && $oversized['note'] === null && (string) $oversized['id'] === '2', 'Oversized source body is rejected on the SELECT before entering PHP, with its original ID retained');
-    $largeRules = \Box\Mod\Whmcsmigrator\Mapping\Profile::defaults($largeSchema)['fields']['tblnotes'];
-    rejects(fn () => (new \Box\Mod\Whmcsmigrator\Archive\Repository($store))->preserve($profile['source_id'], 'tblnotes', '2', $oversized, $largeSchema['tblnotes'], $largeRules, $financial['id']), 'An oversized extraction sentinel cannot become a null/truncated archive record');
+    $largeRules = \Box\Mod\Whmcstofossbilling\Mapping\Profile::defaults($largeSchema)['fields']['tblnotes'];
+    rejects(fn () => (new \Box\Mod\Whmcstofossbilling\Archive\Repository($store))->preserve($profile['source_id'], 'tblnotes', '2', $oversized, $largeSchema['tblnotes'], $largeRules, $financial['id']), 'An oversized extraction sentinel cannot become a null/truncated archive record');
     $page = $reader->page('tblnotes', $largeSchema['tblnotes'], '2', '22', 50);
     expect(count($page['rows']) > 0 && count($page['rows']) < 20 && !$page['exhausted'], 'Byte-limited page does not falsely report end-of-table when fewer than 50 rows fit');
     $read = count($page['rows']);
@@ -489,7 +495,7 @@ try {
     } while ($result['status'] === 'running');
     $largeStatus = $service->status($largeRun['id']);
     expect($largeStatus['status'] === 'requires_action' && (int) $largeStatus['categories'][0]['processed'] === 22 && (int) $largeStatus['categories'][0]['failed'] === 1, 'Actual resumable engine processes every byte-limited record and reports the oversized record as failed');
-    expect((int) $store->one("SELECT COUNT(*) AS n FROM whmcsmigrator_snapshot WHERE run_id=? AND table_name='tblnotes'", [$largeRun['id']])['n'] === 21, 'Oversized record is not archived as fabricated null data; all other records are preserved');
+    expect((int) $store->one("SELECT COUNT(*) AS n FROM whmcstofossbilling_snapshot WHERE run_id=? AND table_name='tblnotes'", [$largeRun['id']])['n'] === 21, 'Oversized record is not archived as fabricated null data; all other records are preserved');
     expect($sourceDigest() === $beforeLargeRead, 'Large-record migration leaves the synthetic source unchanged');
     $service->uninstall();
     expect((int) $store->one('SELECT COUNT(*) AS n FROM client')['n'] === 3, 'Uninstall never deletes imported business records');

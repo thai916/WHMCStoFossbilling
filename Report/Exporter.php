@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Report;
+namespace Box\Mod\Whmcstofossbilling\Report;
 
-use Box\Mod\Whmcsmigrator\Destination\Store;
-use Box\Mod\Whmcsmigrator\Service;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Destination\Store;
+use Box\Mod\Whmcstofossbilling\Service;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 final class Exporter
@@ -70,11 +70,11 @@ final class Exporter
             do {
                 // Page attempts, not a one-to-many identity join: an aggregate can map
                 // to multiple destination records without losing children at a page boundary.
-                $records = $store->all('SELECT id,table_name,source_key,status,error_type,message,attempts FROM whmcsmigrator_attempt WHERE run_id=? AND id>? ORDER BY id LIMIT 500', [$runId, $after]);
+                $records = $store->all('SELECT id,table_name,source_key,status,error_type,message,attempts FROM whmcstofossbilling_attempt WHERE run_id=? AND id>? ORDER BY id LIMIT 500', [$runId, $after]);
                 foreach ($records as $row) {
                     $after = (int) $row['id'];
                     unset($row['id']);
-                    $destinations = $store->all('SELECT destination_entity,destination_id FROM whmcsmigrator_identity WHERE source_id=? AND table_name=? AND source_key=? ORDER BY destination_entity', [$summary['source_id'], $row['table_name'], $row['source_key']]);
+                    $destinations = $store->all('SELECT destination_entity,destination_id FROM whmcstofossbilling_identity WHERE source_id=? AND table_name=? AND source_key=? ORDER BY destination_entity', [$summary['source_id'], $row['table_name'], $row['source_key']]);
                     $row['destinations'] = $destinations;
                     if ($format === 'json') {
                         fwrite($output, ($first ? '' : ',') . Store::json($row));
@@ -92,7 +92,7 @@ final class Exporter
             fclose($output);
         });
         $response->headers->set('Content-Type', $format === 'json' ? 'application/json; charset=utf-8' : 'text/csv; charset=utf-8');
-        $response->headers->set('Content-Disposition', 'attachment; filename="whmcsmigrator-' . $runId . '.' . $format . '"');
+        $response->headers->set('Content-Disposition', 'attachment; filename="whmcstofossbilling-' . $runId . '.' . $format . '"');
         $response->headers->set('Cache-Control', 'private, no-store');
         $response->headers->set('X-Content-Type-Options', 'nosniff');
 

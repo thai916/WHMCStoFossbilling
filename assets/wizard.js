@@ -1,7 +1,7 @@
 /* No credentials, customer records or migration state are stored in browser storage. */
 (() => {
     "use strict";
-    const root = document.getElementById("whmcsmigrator");
+    const root = document.getElementById("whmcstofossbilling");
     if (!root) return;
     const $ = id => document.getElementById(`wm-${id}`);
     let source = null, profile = null, defaultProfile = null, run = null, pumping = false;
@@ -73,7 +73,7 @@
         if (run) $("runs").value = run.id;
     }
     $("schema-upgrade").addEventListener("click", handle(async () => {
-        if (!window.confirm("Create missing whmcsmigrator_* tables only? No core schema or business records will change.")) return;
+        if (!window.confirm("Create missing whmcstofossbilling_* tables only? No core schema or business records will change.")) return;
         await api("schema_upgrade", { confirmation: "UPGRADE EXTENSION TABLES" });
         await dashboard(); notice("Extension tracking schema upgraded. No source connection or import ran.");
     }));
@@ -263,7 +263,7 @@
     }
     $("profile-export").addEventListener("click", handle(async () => {
         if (!profile) throw new Error("Select a source first.");
-        download(new Blob([JSON.stringify(profile, null, 2)], { type: "application/json" }), "whmcsmigrator-mapping.json");
+        download(new Blob([JSON.stringify(profile, null, 2)], { type: "application/json" }), "whmcstofossbilling-mapping.json");
     }));
     $("profile-import").addEventListener("change", handle(async event => {
         const file = event.target.files[0];
@@ -385,7 +385,7 @@
     })));
     ["json", "csv"].forEach(format => $(`report-${format}`).addEventListener("click", handle(async () => {
         if (!run) throw new Error("Select a run first.");
-        download(await api("report_export", { run_id: run.id, format }, true), `whmcsmigrator-${run.id}.${format}`);
+        download(await api("report_export", { run_id: run.id, format }, true), `whmcstofossbilling-${run.id}.${format}`);
     })));
     $("archive-search").addEventListener("submit", handle(async () => {
         if (!source) throw new Error("Select a tested source first.");

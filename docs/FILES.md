@@ -1,6 +1,6 @@
 # Created source files
 
-All paths below are relative to `modules/Whmcsmigrator/`. No existing FOSSBilling source file was edited.
+All paths below are relative to `modules/Whmcstofossbilling/`. No existing FOSSBilling source file was edited.
 
 ```text
 .gitignore
@@ -53,8 +53,8 @@ assets/wizard.js
 certificates/cacert.pem
 certificates/LICENSE-MPL-2.0.txt
 certificates/README.md
-templates/admin/mod_whmcsmigrator_index.html.twig
-templates/admin/mod_whmcsmigrator_settings.html.twig
+templates/admin/mod_whmcstofossbilling_index.html.twig
+templates/admin/mod_whmcstofossbilling_settings.html.twig
 tests/bootstrap.php
 tests/browser.cjs
 tests/integration.php

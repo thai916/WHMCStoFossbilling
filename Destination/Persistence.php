@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Destination;
+namespace Box\Mod\Whmcstofossbilling\Destination;
 
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 /** Shared validated, non-eventful persistence. Never accepts an arbitrary table from an API. */
 final class Persistence
@@ -31,12 +31,12 @@ final class Persistence
         $this->store->execute('UPDATE `' . $table . '` SET ' . $set . ' WHERE id=?', [...array_values($data), $id]);
         // Refresh only verified module-owned references after an intentional module write.
         $current = $this->store->one('SELECT * FROM `' . $table . '` WHERE id=?', [$id]);
-        $this->store->execute('UPDATE whmcsmigrator_identity SET destination_checksum=? WHERE source_id=? AND destination_entity=? AND destination_id=?', [hash('sha256', Store::json($current)), $this->source, $table, $id]);
+        $this->store->execute('UPDATE whmcstofossbilling_identity SET destination_checksum=? WHERE source_id=? AND destination_entity=? AND destination_id=?', [hash('sha256', Store::json($current)), $this->source, $table, $id]);
     }
 
     public function mapping(string $suffix, string $key, string $entity): ?array
     {
-        return $this->store->one('SELECT * FROM whmcsmigrator_identity WHERE source_id=? AND table_name=? AND source_key=? AND destination_entity=?', [$this->source, $this->prefix . $suffix, $key, $entity]);
+        return $this->store->one('SELECT * FROM whmcstofossbilling_identity WHERE source_id=? AND table_name=? AND source_key=? AND destination_entity=?', [$this->source, $this->prefix . $suffix, $key, $entity]);
     }
 
     public function resolve(string $suffix, string $key, string $entity): int
@@ -77,7 +77,7 @@ final class Persistence
     public function track(string $suffix, string $key, string $entity, int $id, string $checksum, string $run): void
     {
         $row = $this->store->one('SELECT * FROM `' . $entity . '` WHERE id=?', [$id]);
-        $this->store->execute('INSERT INTO whmcsmigrator_identity (source_id,table_name,source_key,destination_entity,destination_id,checksum,destination_checksum,run_id,created_at) VALUES (?,?,?,?,?,?,?,?,UTC_TIMESTAMP())', [$this->source, $this->prefix . $suffix, $key, $entity, $id, $checksum, hash('sha256', Store::json($row)), $run]);
+        $this->store->execute('INSERT INTO whmcstofossbilling_identity (source_id,table_name,source_key,destination_entity,destination_id,checksum,destination_checksum,run_id,created_at) VALUES (?,?,?,?,?,?,?,?,UTC_TIMESTAMP())', [$this->source, $this->prefix . $suffix, $key, $entity, $id, $checksum, hash('sha256', Store::json($row)), $run]);
     }
 
     private function validate(string $table, array $data): void

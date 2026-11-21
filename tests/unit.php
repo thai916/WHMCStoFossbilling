@@ -4,16 +4,16 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 
-use Box\Mod\Whmcsmigrator\Archive\Sanitizer;
-use Box\Mod\Whmcsmigrator\Destination\NativeWriter;
-use Box\Mod\Whmcsmigrator\Finance\Decimal;
-use Box\Mod\Whmcsmigrator\Mapping\Profile;
-use Box\Mod\Whmcsmigrator\Report\Exporter;
-use Box\Mod\Whmcsmigrator\Security\Sensitive;
-use Box\Mod\Whmcsmigrator\Security\Vault;
-use Box\Mod\Whmcsmigrator\Source\ConnectionOptions;
-use Box\Mod\Whmcsmigrator\Source\GrantPolicy;
-use Box\Mod\Whmcsmigrator\Source\Reader;
+use Box\Mod\Whmcstofossbilling\Archive\Sanitizer;
+use Box\Mod\Whmcstofossbilling\Destination\NativeWriter;
+use Box\Mod\Whmcstofossbilling\Finance\Decimal;
+use Box\Mod\Whmcstofossbilling\Mapping\Profile;
+use Box\Mod\Whmcstofossbilling\Report\Exporter;
+use Box\Mod\Whmcstofossbilling\Security\Sensitive;
+use Box\Mod\Whmcstofossbilling\Security\Vault;
+use Box\Mod\Whmcstofossbilling\Source\ConnectionOptions;
+use Box\Mod\Whmcstofossbilling\Source\GrantPolicy;
+use Box\Mod\Whmcstofossbilling\Source\Reader;
 
 $options = ['host' => '127.0.0.1', 'database' => 'whmcs_test', 'username' => 'reader', 'password' => 'test-only', 'security_acknowledged' => true];
 expect(ConnectionOptions::validate($options)['port'] === 3306, 'Port defaults to 3306');
@@ -31,35 +31,35 @@ rejects(fn () => ConnectionOptions::validate(array_replace($options, ['security_
 rejects(fn () => ConnectionOptions::validate(array_replace($options, ['security_mode' => 'standard', 'security_acknowledged' => 'false'])), 'String false cannot authorize a weaker security mode');
 $plain = ConnectionOptions::validate(array_replace($options, ['host' => 'db.example.com', 'security_mode' => 'standard', 'security_acknowledged' => true, 'tls_ca' => 'D:/not-required.pem']));
 expect($plain['tls'] === false && $plain['tls_ca'] === '', 'Explicit remote standard mode works without a readable CA path');
-expect(!isset(\Box\Mod\Whmcsmigrator\Source\ConnectionFactory::attributes($plain)[PDO::MYSQL_ATTR_SSL_CA]), 'Standard PDO attributes do not request TLS or require a TLS hostname/CA');
+expect(!isset(\Box\Mod\Whmcstofossbilling\Source\ConnectionFactory::attributes($plain)[PDO::MYSQL_ATTR_SSL_CA]), 'Standard PDO attributes do not request TLS or require a TLS hostname/CA');
 $unverified = ConnectionOptions::validate($options + ['security_mode' => 'unverified_tls', 'security_acknowledged' => true]);
-$attrs = \Box\Mod\Whmcsmigrator\Source\ConnectionFactory::attributes($unverified);
+$attrs = \Box\Mod\Whmcstofossbilling\Source\ConnectionFactory::attributes($unverified);
 expect(isset($attrs[PDO::MYSQL_ATTR_SSL_CA]) && $attrs[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] === false, 'Unverified mode explicitly requests encryption while disabling only identity verification');
 rejects(fn () => ConnectionOptions::assertPlan($plain, ['source_security_mode' => 'verified_tls']), 'Existing run security cannot silently downgrade after profile retesting');
 rejects(fn () => ConnectionOptions::validate($options + ['tls' => true, 'tls_ca' => 'https://example.com/ca']), 'Remote certificate URL rejected');
 $tlsOptions = ConnectionOptions::validate(array_replace($options, ['host' => 'db.example.com', 'tls' => true]));
-expect(\Box\Mod\Whmcsmigrator\Source\CaBundle::readable($tlsOptions['tls_ca']), 'Remote TLS automatically uses a readable default CA bundle when no custom path is supplied');
+expect(\Box\Mod\Whmcstofossbilling\Source\CaBundle::readable($tlsOptions['tls_ca']), 'Remote TLS automatically uses a readable default CA bundle when no custom path is supplied');
 $bundled = dirname(__DIR__) . '/certificates/cacert.pem';
 $certificates = file_get_contents($bundled);
 preg_match_all('/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/s', $certificates, $matches);
 expect(count($matches[0]) > 100 && array_reduce($matches[0], static fn (bool $ok, string $pem): bool => $ok && openssl_x509_read($pem) !== false, true), 'Bundled trust store contains parseable real CA certificates, not a generated placeholder');
-rejects(fn () => ConnectionOptions::validate($options + ['tls' => true, 'tls_ca' => 'D:/missing-whmcsmigrator-ca.pem']), 'Invalid explicit CA override is rejected instead of silently ignored');
+rejects(fn () => ConnectionOptions::validate($options + ['tls' => true, 'tls_ca' => 'D:/missing-whmcstofossbilling-ca.pem']), 'Invalid explicit CA override is rejected instead of silently ignored');
 rejects(fn () => ConnectionOptions::validate($options + ['tls' => true, 'tls_ca' => '\\\\server\\share\\ca.pem']), 'Network-share certificate path rejected');
 expect(ConnectionOptions::validate($options + ['source_timezone' => 'UTC', 'source_timezone_verified' => false])['source_timezone'] === '', 'Suggested timezone cannot become verified source evidence without confirmation');
 expect(ConnectionOptions::validate($options + ['source_timezone' => 'Asia/Kolkata', 'source_timezone_verified' => true])['source_timezone'] === 'Asia/Kolkata', 'Explicitly verified dropdown timezone is preserved');
-expect(\Box\Mod\Whmcsmigrator\Source\PublicIp::parse("8.8.8.8\n") === '8.8.8.8', 'IP response parser accepts a public IPv4 address');
+expect(\Box\Mod\Whmcstofossbilling\Source\PublicIp::parse("8.8.8.8\n") === '8.8.8.8', 'IP response parser accepts a public IPv4 address');
 foreach (['127.0.0.1', '192.168.1.1', '::1', '<script>8.8.8.8</script>', 'not-an-ip'] as $invalidIp) {
-    rejects(fn () => \Box\Mod\Whmcsmigrator\Source\PublicIp::parse($invalidIp), 'IP response parser rejects private/non-IPv4/non-IP response: ' . $invalidIp);
+    rejects(fn () => \Box\Mod\Whmcstofossbilling\Source\PublicIp::parse($invalidIp), 'IP response parser rejects private/non-IPv4/non-IP response: ' . $invalidIp);
 }
-$zone = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::unselected();
+$zone = \Box\Mod\Whmcstofossbilling\Source\SourceTimezone::unselected();
 expect($zone['timezone'] === null && $zone['status'] === 'unverified' && $zone['method'] === 'administrator_selection_required', 'No automatic timezone inference remains; an unselected source stays unverified');
-$selectedZone = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::selected('Asia/Kolkata');
+$selectedZone = \Box\Mod\Whmcstofossbilling\Source\SourceTimezone::selected('Asia/Kolkata');
 expect($selectedZone['timezone'] === 'Asia/Kolkata' && $selectedZone['confidence'] === 'administrator_verified' && $selectedZone['method'] === 'administrator_selected_application_timezone', 'Administrator-selected application timezone is recorded as verified profile evidence');
-expect(\Box\Mod\Whmcsmigrator\Source\SourceTimezone::selected('America/Chicago')['timezone'] === 'America/Chicago', 'Default dropdown timezone is a valid selectable IANA identifier');
-rejects(fn () => \Box\Mod\Whmcsmigrator\Source\SourceTimezone::selected('-06:00'), 'A UTC offset cannot be promoted to a historical IANA timezone');
+expect(\Box\Mod\Whmcstofossbilling\Source\SourceTimezone::selected('America/Chicago')['timezone'] === 'America/Chicago', 'Default dropdown timezone is a valid selectable IANA identifier');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Source\SourceTimezone::selected('-06:00'), 'A UTC offset cannot be promoted to a historical IANA timezone');
 $timestampSchema = ['tblclients' => ['suffix' => 'clients', 'columns' => ['datecreated' => ['type' => 'timestamp']]]];
-rejects(fn () => \Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($timestampSchema, ['tblclients'], 'reference_native'), 'Session-converted MySQL TIMESTAMP storage cannot masquerade as application-local DATETIME');
-\Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($timestampSchema, ['tblclients'], 'archive');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Source\SourceTimezone::assertNativeStorage($timestampSchema, ['tblclients'], 'reference_native'), 'Session-converted MySQL TIMESTAMP storage cannot masquerade as application-local DATETIME');
+\Box\Mod\Whmcstofossbilling\Source\SourceTimezone::assertNativeStorage($timestampSchema, ['tblclients'], 'archive');
 expect(true, 'Unreviewed TIMESTAMP storage remains available for unchanged private archive preservation');
 foreach ([
     ['SQLSTATE[HY000] [2002] certificate verify failed password=NEVER_EXPOSE', 'TLS certificate validation failed'],
@@ -69,7 +69,7 @@ foreach ([
     ['SQLSTATE[HY000] [2002] php_network_getaddresses getaddrinfo failed', 'hostname could not be resolved'],
     ['SQLSTATE[HY000] [2002] no route to host', 'host is unreachable'],
 ] as [$driverText, $expected]) {
-    $message = \Box\Mod\Whmcsmigrator\Source\ConnectionDiagnostics::message(new RuntimeException($driverText));
+    $message = \Box\Mod\Whmcstofossbilling\Source\ConnectionDiagnostics::message(new RuntimeException($driverText));
     expect(str_contains($message, $expected) && !str_contains($message, 'NEVER_EXPOSE'), 'Connection diagnostics classify ' . $expected . ' without leaking raw driver text');
 }
 GrantPolicy::verify(['GRANT USAGE ON *.* TO `r`@`localhost`', 'GRANT SELECT ON `whmcs_test`.* TO `r`@`localhost`'], 'whmcs_test');
@@ -117,39 +117,39 @@ rejects(fn () => Profile::validate($profile, $schema), 'Mapping customer input i
 $profile = Profile::defaults($schema);
 $profile['fields']['tblclients']['email']['transform'] = 'eval';
 rejects(fn () => Profile::validate($profile, $schema), 'Executable transformation rejected');
-expect(\Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2010-01-01 05:30:00', 'Asia/Kolkata') === '2010-01-01 00:00:00', 'Verified source timezone converts event timestamps to UTC');
-expect(\Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2010-01-01', null) === '2010-01-01 00:00:00', 'Business calendar date is not shifted by timezone conversion');
-rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2010-01-01 00:00:00', null), 'Unknown source event timezone blocks native timestamp import');
-rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2026-03-08 02:30:00', 'America/New_York'), 'Nonexistent daylight-saving timestamp rejected');
-rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2026-11-01 01:30:00', 'America/New_York'), 'Ambiguous repeated daylight-saving timestamp rejected');
+expect(\Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc('2010-01-01 05:30:00', 'Asia/Kolkata') === '2010-01-01 00:00:00', 'Verified source timezone converts event timestamps to UTC');
+expect(\Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc('2010-01-01', null) === '2010-01-01 00:00:00', 'Business calendar date is not shifted by timezone conversion');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc('2010-01-01 00:00:00', null), 'Unknown source event timezone blocks native timestamp import');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc('2026-03-08 02:30:00', 'America/New_York'), 'Nonexistent daylight-saving timestamp rejected');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc('2026-11-01 01:30:00', 'America/New_York'), 'Ambiguous repeated daylight-saving timestamp rejected');
 $usedFallback = true;
-expect(\Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2010-01-01', null, NativeWriter::DATE_FALLBACK, $usedFallback) === '2010-01-01 00:00:00' && $usedFallback === false, 'Valid dates never report a substitution');
+expect(\Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc('2010-01-01', null, NativeWriter::DATE_FALLBACK, $usedFallback) === '2010-01-01 00:00:00' && $usedFallback === false, 'Valid dates never report a substitution');
 $usedFallback = false;
-expect(\Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('0000-00-00', null, NativeWriter::DATE_FALLBACK, $usedFallback) === NativeWriter::DATE_FALLBACK && $usedFallback, 'Explicit opt-in substitutes a safe sentinel for an invalid calendar date');
+expect(\Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc('0000-00-00', null, NativeWriter::DATE_FALLBACK, $usedFallback) === NativeWriter::DATE_FALLBACK && $usedFallback, 'Explicit opt-in substitutes a safe sentinel for an invalid calendar date');
 $usedFallback = false;
-expect(\Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('0000-00-00 00:00:00', 'UTC', NativeWriter::DATE_FALLBACK, $usedFallback) === NativeWriter::DATE_FALLBACK && $usedFallback, 'Explicit opt-in also covers impossible zero timestamps');
+expect(\Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc('0000-00-00 00:00:00', 'UTC', NativeWriter::DATE_FALLBACK, $usedFallback) === NativeWriter::DATE_FALLBACK && $usedFallback, 'Explicit opt-in also covers impossible zero timestamps');
 $usedFallback = false;
-rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2026-03-08 02:30:00', 'America/New_York', NativeWriter::DATE_FALLBACK, $usedFallback), 'Daylight-saving gaps are never replaced by a sentinel');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc('2026-03-08 02:30:00', 'America/New_York', NativeWriter::DATE_FALLBACK, $usedFallback), 'Daylight-saving gaps are never replaced by a sentinel');
 $usedFallback = false;
-rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('not a date', null, NativeWriter::DATE_FALLBACK, $usedFallback), 'Malformed non-date text still requires review');
-rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('0000-00-00', null), 'Strict default still rejects zero dates without the explicit policy');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc('not a date', null, NativeWriter::DATE_FALLBACK, $usedFallback), 'Malformed non-date text still requires review');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Mapping\EventDate::utc('0000-00-00', null), 'Strict default still rejects zero dates without the explicit policy');
 expect(Decimal::tax('19.99', '10') === '2.00' && Decimal::round('-1.005') === '-1.01', 'Decimal-only native tax compatibility and half-up rounding');
 $price = [];
-foreach (\Box\Mod\Whmcsmigrator\Destination\ProductPricing::CYCLES as $column => [$target, $setup]) {
+foreach (\Box\Mod\Whmcstofossbilling\Destination\ProductPricing::CYCLES as $column => [$target, $setup]) {
     $price[$column] = '12.34';
     $price[$setup] = '1.23';
 }
-$matrix = \Box\Mod\Whmcsmigrator\Destination\ProductPricing::matrix($price, 'recurrent');
+$matrix = \Box\Mod\Whmcstofossbilling\Destination\ProductPricing::matrix($price, 'recurrent');
 expect($matrix['native']['b_price'] === '12.34' && $matrix['native']['bia_setup_price'] === '1.23', 'Semiannual/biennial price and setup column mapping verified');
 $price['monthly'] = '-1.00';
-expect(\Box\Mod\Whmcsmigrator\Destination\ProductPricing::matrix($price, 'recurrent')['native']['m_enabled'] === 0, 'Negative-one source sentinel disables a cycle, not a negative charge');
-rejects(fn () => \Box\Mod\Whmcsmigrator\Destination\ProductPricing::matrix($price, 'once'), 'One-time price cannot use a disabled monthly slot');
+expect(\Box\Mod\Whmcstofossbilling\Destination\ProductPricing::matrix($price, 'recurrent')['native']['m_enabled'] === 0, 'Negative-one source sentinel disables a cycle, not a negative charge');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Destination\ProductPricing::matrix($price, 'once'), 'One-time price cannot use a disabled monthly slot');
 $price['monthly'] = '-0.50';
-rejects(fn () => \Box\Mod\Whmcsmigrator\Destination\ProductPricing::matrix($price, 'recurrent'), 'Unsupported negative price semantics rejected');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Destination\ProductPricing::matrix($price, 'recurrent'), 'Unsupported negative price semantics rejected');
 $price['monthly'] = '12.34';
 unset($price['tsetupfee']);
-rejects(fn () => \Box\Mod\Whmcsmigrator\Destination\ProductPricing::matrix($price, 'recurrent'), 'Missing source pricing fields are not replaced by zero');
-rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\PreviewValidator::validate('accounts', ['date' => '2010-01-01 00:00:00', 'invoiceid' => 1, 'currency' => 1, 'amountin' => '0.00', 'amountout' => '0.00'], 'UTC'), 'Fees-only/empty source movement cannot become a fabricated payment');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Destination\ProductPricing::matrix($price, 'recurrent'), 'Missing source pricing fields are not replaced by zero');
+rejects(fn () => \Box\Mod\Whmcstofossbilling\Mapping\PreviewValidator::validate('accounts', ['date' => '2010-01-01 00:00:00', 'invoiceid' => 1, 'currency' => 1, 'amountin' => '0.00', 'amountout' => '0.00'], 'UTC'), 'Fees-only/empty source movement cannot become a fabricated payment');
 $saved = Profile::defaults($schema);
 $saved['fields']['tblclients']['email']['transform'] = 'lowercase';
 $extended = $schema;

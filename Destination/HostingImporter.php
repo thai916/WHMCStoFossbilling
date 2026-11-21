@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Destination;
+namespace Box\Mod\Whmcstofossbilling\Destination;
 
-use Box\Mod\Whmcsmigrator\Finance\Decimal;
-use Box\Mod\Whmcsmigrator\Mapping\EventDate;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Finance\Decimal;
+use Box\Mod\Whmcstofossbilling\Mapping\EventDate;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 /** Historical non-operational services only. Active/suspended/pending remain blocked. */
 final class HostingImporter

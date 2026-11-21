@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator;
+namespace Box\Mod\Whmcstofossbilling;
 
-use Box\Mod\Whmcsmigrator\Destination\NativeWriter;
-use Box\Mod\Whmcsmigrator\Destination\Store;
-use Box\Mod\Whmcsmigrator\Installation\Schema;
-use Box\Mod\Whmcsmigrator\Mapping\Profile;
-use Box\Mod\Whmcsmigrator\Migration\Engine;
-use Box\Mod\Whmcsmigrator\Migration\Dependencies;
-use Box\Mod\Whmcsmigrator\Finance\Reconciler;
-use Box\Mod\Whmcsmigrator\Migration\Planner;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
-use Box\Mod\Whmcsmigrator\Security\Vault;
-use Box\Mod\Whmcsmigrator\Source\ConnectionOptions;
-use Box\Mod\Whmcsmigrator\Source\Reader;
+use Box\Mod\Whmcstofossbilling\Destination\NativeWriter;
+use Box\Mod\Whmcstofossbilling\Destination\Store;
+use Box\Mod\Whmcstofossbilling\Installation\Schema;
+use Box\Mod\Whmcstofossbilling\Mapping\Profile;
+use Box\Mod\Whmcstofossbilling\Migration\Engine;
+use Box\Mod\Whmcstofossbilling\Migration\Dependencies;
+use Box\Mod\Whmcstofossbilling\Finance\Reconciler;
+use Box\Mod\Whmcstofossbilling\Migration\Planner;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Security\Vault;
+use Box\Mod\Whmcstofossbilling\Source\ConnectionOptions;
+use Box\Mod\Whmcstofossbilling\Source\Reader;
 use FOSSBilling\Config;
 
 final class Service implements \FOSSBilling\InjectionAwareInterface
@@ -92,7 +92,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
 
     public function sources(): array
     {
-        return $this->store()->all('SELECT id,label,source_version,tested_at,created_at FROM whmcsmigrator_source ORDER BY id DESC');
+        return $this->store()->all('SELECT id,label,source_version,tested_at,created_at FROM whmcstofossbilling_source ORDER BY id DESC');
     }
 
     public function testConnection(#[\SensitiveParameter] array $input): array
@@ -109,24 +109,24 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
             throw new SafeException('Source version could not be detected. Verify WHMCS 8.x manually and provide the explicit version confirmation.');
         }
         $options['timezone_detection'] = ($options['source_timezone'] ?? '') !== ''
-            ? \Box\Mod\Whmcsmigrator\Source\SourceTimezone::selected($options['source_timezone'])
-            : \Box\Mod\Whmcsmigrator\Source\SourceTimezone::unselected();
+            ? \Box\Mod\Whmcstofossbilling\Source\SourceTimezone::selected($options['source_timezone'])
+            : \Box\Mod\Whmcstofossbilling\Source\SourceTimezone::unselected();
         $options['connection_status'] = $reader->connectionStatus() + [
             'table_availability' => ['available' => true, 'tables_found' => count($schema), 'required_tables' => ['clients', 'products', 'hosting', 'invoices', 'invoiceitems', 'accounts']],
         ];
         $store = $this->store();
         $store->verifyDestination();
         $fingerprint = hash('sha256', Store::json([$options['host'], $options['port'], $options['database'], $options['prefix']]));
-        $lock = 'whmcsmigrator-profile-' . substr($fingerprint, 0, 32);
+        $lock = 'whmcstofossbilling-profile-' . substr($fingerprint, 0, 32);
         $store->lock($lock);
         try {
-            $previous = $store->one('SELECT * FROM whmcsmigrator_source WHERE fingerprint=?', [$fingerprint]);
+            $previous = $store->one('SELECT * FROM whmcstofossbilling_source WHERE fingerprint=?', [$fingerprint]);
             $mapping = $previous
                 ? Store::json(Profile::rebase(json_decode($previous['mapping_json'], true, 128, JSON_THROW_ON_ERROR), $schema))
                 : Store::json(Profile::defaults($schema));
             $label = $options['host'] . ':' . $options['port'] . '/' . $options['database'];
-            $store->execute('INSERT INTO whmcsmigrator_source (fingerprint,label,credentials,schema_json,mapping_json,source_version,tested_at,created_at) VALUES (?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE credentials=VALUES(credentials),schema_json=VALUES(schema_json),mapping_json=VALUES(mapping_json),source_version=VALUES(source_version),tested_at=UTC_TIMESTAMP()', [$fingerprint, $label, $this->vault()->seal($options), Store::json($schema), $mapping, $version]);
-            $id = (int) $store->one('SELECT id FROM whmcsmigrator_source WHERE fingerprint=?', [$fingerprint])['id'];
+            $store->execute('INSERT INTO whmcstofossbilling_source (fingerprint,label,credentials,schema_json,mapping_json,source_version,tested_at,created_at) VALUES (?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE credentials=VALUES(credentials),schema_json=VALUES(schema_json),mapping_json=VALUES(mapping_json),source_version=VALUES(source_version),tested_at=UTC_TIMESTAMP()', [$fingerprint, $label, $this->vault()->seal($options), Store::json($schema), $mapping, $version]);
+            $id = (int) $store->one('SELECT id FROM whmcstofossbilling_source WHERE fingerprint=?', [$fingerprint])['id'];
 
             return $this->mapping($id);
         } finally {
@@ -150,7 +150,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
             'schema' => $schema, 'profile' => $profile, 'fields' => Profile::describe($schema, $profile),
             'native_client_targets' => array_values(Profile::CLIENT_FIELDS),
             'native_entities' => NativeWriter::ENTITIES,
-            'analysis' => $this->store()->all('SELECT table_name,expected,maximum,analyzed_at FROM whmcsmigrator_analysis WHERE source_id=?', [$source]),
+            'analysis' => $this->store()->all('SELECT table_name,expected,maximum,analyzed_at FROM whmcstofossbilling_analysis WHERE source_id=?', [$source]),
             'blockers' => Planner::BLOCKERS,
         ];
     }
@@ -158,14 +158,14 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
     public function confirmSourceTimezone(int $source, string $timezone): array
     {
         $store = $this->store();
-        $lock = 'whmcsmigrator-source-' . $source;
+        $lock = 'whmcstofossbilling-source-' . $source;
         $store->lock($lock);
         try {
             $row = $store->source($source);
             $options = $this->vault()->open($row['credentials']);
-            $options['timezone_detection'] = \Box\Mod\Whmcsmigrator\Source\SourceTimezone::selected($timezone);
+            $options['timezone_detection'] = \Box\Mod\Whmcstofossbilling\Source\SourceTimezone::selected($timezone);
             $options['source_timezone'] = $timezone;
-            $store->execute('UPDATE whmcsmigrator_source SET credentials=? WHERE id=?', [$this->vault()->seal($options), $source]);
+            $store->execute('UPDATE whmcstofossbilling_source SET credentials=? WHERE id=?', [$this->vault()->seal($options), $source]);
 
             return $this->mapping($source);
         } finally {
@@ -178,7 +178,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         $row = $this->store()->source($source);
         $schema = json_decode($row['schema_json'], true, 128, JSON_THROW_ON_ERROR);
         $clean = Profile::validate($profile, $schema);
-        $this->store()->execute('UPDATE whmcsmigrator_source SET mapping_json=? WHERE id=?', [Store::json($clean), $source]);
+        $this->store()->execute('UPDATE whmcstofossbilling_source SET mapping_json=? WHERE id=?', [Store::json($clean), $source]);
 
         return ['profile' => $clean, 'validated' => true];
     }
@@ -193,7 +193,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
             throw new SafeException('The source schema changed. Test the connection again.');
         }
         $bounds = $reader->bounds($name, $definition);
-        $this->store()->execute('INSERT INTO whmcsmigrator_analysis (source_id,table_name,expected,maximum,schema_checksum,analyzed_at) VALUES (?,?,?,?,?,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE expected=VALUES(expected),maximum=VALUES(maximum),schema_checksum=VALUES(schema_checksum),analyzed_at=UTC_TIMESTAMP()', [$source, $name, $bounds['count'], $bounds['maximum'], hash('sha256', $row['schema_json'])]);
+        $this->store()->execute('INSERT INTO whmcstofossbilling_analysis (source_id,table_name,expected,maximum,schema_checksum,analyzed_at) VALUES (?,?,?,?,?,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE expected=VALUES(expected),maximum=VALUES(maximum),schema_checksum=VALUES(schema_checksum),analyzed_at=UTC_TIMESTAMP()', [$source, $name, $bounds['count'], $bounds['maximum'], hash('sha256', $row['schema_json'])]);
 
         return ['table' => $name, ...$bounds];
     }
@@ -236,7 +236,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         }
         $store = $this->store();
         $plan = Planner::build($store, (int) $source['id'], $schema, array_values(array_unique($selection)));
-        \Box\Mod\Whmcsmigrator\Source\SourceTimezone::assertNativeStorage($schema, array_keys($plan['tables']), $target);
+        \Box\Mod\Whmcstofossbilling\Source\SourceTimezone::assertNativeStorage($schema, array_keys($plan['tables']), $target);
         $plan['destination_fingerprint'] = $store->verifyDestination()['fingerprint'];
         $options = $this->vault()->open($source['credentials']);
         $plan['source_timezone'] = $options['source_timezone'] ?? '';
@@ -261,16 +261,16 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         $plan['destination_timezone'] = Config::getProperty('i18n.timezone', 'UTC');
         $id = bin2hex(random_bytes(16));
         if ($store->pdo->inTransaction()) throw new SafeException('A destination transaction is already active. Migration plan creation cannot take ownership of another transaction.');
-        $lock = 'whmcsmigrator-source-' . $source['id'];
+        $lock = 'whmcstofossbilling-source-' . $source['id'];
         $store->lock($lock);
         try {
-            if ($mode !== 'dry_run' && $store->one("SELECT id FROM whmcsmigrator_run WHERE source_id=? AND mode<>'dry_run' AND status IN ('running','paused') LIMIT 1", [$source['id']])) {
+            if ($mode !== 'dry_run' && $store->one("SELECT id FROM whmcstofossbilling_run WHERE source_id=? AND mode<>'dry_run' AND status IN ('running','paused') LIMIT 1", [$source['id']])) {
                 throw new SafeException('Another archival/native run for this source is unfinished. Finish or cancel it before creating another non-preview run.');
             }
             $store->pdo->beginTransaction();
-            $store->execute('INSERT INTO whmcsmigrator_run (id,source_id,status,mode,schema_json,mapping_json,plan_json,owner_id,backup_reference,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())', [$id, $source['id'], 'paused', $mode, Store::json($schema), Store::json($profile), Store::json($plan), $admin, mb_substr(trim((string) ($input['backup_reference'] ?? 'dry run')), 0, 255)]);
+            $store->execute('INSERT INTO whmcstofossbilling_run (id,source_id,status,mode,schema_json,mapping_json,plan_json,owner_id,backup_reference,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())', [$id, $source['id'], 'paused', $mode, Store::json($schema), Store::json($profile), Store::json($plan), $admin, mb_substr(trim((string) ($input['backup_reference'] ?? 'dry run')), 0, 255)]);
             foreach ($plan['tables'] as $table => $bounds) {
-                $store->execute('INSERT INTO whmcsmigrator_cursor (run_id,table_name,expected,maximum) VALUES (?,?,?,?)', [$id, $table, $bounds['count'], $bounds['maximum']]);
+                $store->execute('INSERT INTO whmcstofossbilling_cursor (run_id,table_name,expected,maximum) VALUES (?,?,?,?)', [$id, $table, $bounds['count'], $bounds['maximum']]);
             }
             $store->pdo->commit();
         } catch (\Throwable $error) {
@@ -287,7 +287,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
     {
         $store = $this->store();
         $run = $store->run($id);
-        $lock = 'whmcsmigrator-source-' . $run['source_id'];
+        $lock = 'whmcstofossbilling-source-' . $run['source_id'];
         $store->lock($lock);
         try {
             $run = $store->run($id);
@@ -297,7 +297,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
                 'cancel' => in_array($run['status'], ['paused', 'running'], true) ? 'cancelled' : throw new SafeException('This migration is already stopped.'),
                 default => throw new SafeException('Unknown migration action.'),
             };
-            $store->execute('UPDATE whmcsmigrator_run SET status=?,updated_at=UTC_TIMESTAMP() WHERE id=?', [$status, $id]);
+            $store->execute('UPDATE whmcstofossbilling_run SET status=?,updated_at=UTC_TIMESTAMP() WHERE id=?', [$status, $id]);
         } finally {
             $store->unlock($lock);
         }
@@ -321,19 +321,19 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         unset($run['schema_json'], $run['mapping_json']);
         $run['plan'] = json_decode($run['plan_json'], true, 128, JSON_THROW_ON_ERROR);
         unset($run['plan_json']);
-        $run['categories'] = $this->store()->all('SELECT table_name,expected,maximum,after_id,processed,imported,archived,skipped,failed,status FROM whmcsmigrator_cursor WHERE run_id=? ORDER BY id', [$id]);
-        $run['errors'] = $this->store()->all("SELECT table_name,source_key,error_type,message,retryable,attempts FROM whmcsmigrator_attempt WHERE run_id=? AND status='failed' ORDER BY id LIMIT 100", [$id]);
-        $run['date_fallbacks'] = $this->store()->all("SELECT table_name,source_key,message AS original_value FROM whmcsmigrator_attempt WHERE run_id=? AND status='date_fallback' ORDER BY id LIMIT 100", [$id]);
+        $run['categories'] = $this->store()->all('SELECT table_name,expected,maximum,after_id,processed,imported,archived,skipped,failed,status FROM whmcstofossbilling_cursor WHERE run_id=? ORDER BY id', [$id]);
+        $run['errors'] = $this->store()->all("SELECT table_name,source_key,error_type,message,retryable,attempts FROM whmcstofossbilling_attempt WHERE run_id=? AND status='failed' ORDER BY id LIMIT 100", [$id]);
+        $run['date_fallbacks'] = $this->store()->all("SELECT table_name,source_key,message AS original_value FROM whmcstofossbilling_attempt WHERE run_id=? AND status='date_fallback' ORDER BY id LIMIT 100", [$id]);
         $run['reconciliation'] = (new Reconciler($this->store()))->summary($id);
-        $run['product_pricing'] = $this->store()->all('SELECT currency,native_applied,COUNT(*) AS price_rows FROM whmcsmigrator_price WHERE run_id=? GROUP BY currency,native_applied ORDER BY currency', [$id]);
-        $run['credit_publication'] = $this->store()->all('SELECT source_key,status,message,attempts FROM whmcsmigrator_credit_result WHERE run_id=? ORDER BY source_key LIMIT 100', [$id]);
+        $run['product_pricing'] = $this->store()->all('SELECT currency,native_applied,COUNT(*) AS price_rows FROM whmcstofossbilling_price WHERE run_id=? GROUP BY currency,native_applied ORDER BY currency', [$id]);
+        $run['credit_publication'] = $this->store()->all('SELECT source_key,status,message,attempts FROM whmcstofossbilling_credit_result WHERE run_id=? ORDER BY source_key LIMIT 100', [$id]);
 
         return $run;
     }
 
     public function runs(): array
     {
-        return $this->store()->all('SELECT r.id,r.source_id,s.label,r.status,r.mode,r.created_at,r.updated_at,r.last_batch_at FROM whmcsmigrator_run r JOIN whmcsmigrator_source s ON s.id=r.source_id ORDER BY r.created_at DESC LIMIT 50');
+        return $this->store()->all('SELECT r.id,r.source_id,s.label,r.status,r.mode,r.created_at,r.updated_at,r.last_batch_at FROM whmcstofossbilling_run r JOIN whmcstofossbilling_source s ON s.id=r.source_id ORDER BY r.created_at DESC LIMIT 50');
     }
 
     public function archive(array $input): array
@@ -354,17 +354,17 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         if (trim((string) ($input['legacy_reference'] ?? '')) !== '') {
             $kind = (string) ($input['legacy_kind'] ?? 'invoice');
             if (!in_array($kind, ['invoice', 'ticket'], true)) throw new SafeException('Legacy reference kind must be invoice or ticket.');
-            $where .= ' AND EXISTS (SELECT 1 FROM whmcsmigrator_legacy_reference r WHERE r.source_id=whmcsmigrator_archive.source_id AND r.table_name=whmcsmigrator_archive.table_name AND r.source_key=whmcsmigrator_archive.source_key AND r.kind=? AND r.reference_hash=?)';
+            $where .= ' AND EXISTS (SELECT 1 FROM whmcstofossbilling_legacy_reference r WHERE r.source_id=whmcstofossbilling_archive.source_id AND r.table_name=whmcstofossbilling_archive.table_name AND r.source_key=whmcstofossbilling_archive.source_key AND r.kind=? AND r.reference_hash=?)';
             $values[] = $kind;
             $values[] = hash('sha256', trim((string) $input['legacy_reference']));
         }
         $offset = max(0, min(100000000, (int) ($input['offset'] ?? 0)));
-        $rows = $this->store()->all('SELECT id,table_name,source_key,payload,original_dates,relationships,exclusions,run_id,created_at,updated_at FROM whmcsmigrator_archive WHERE ' . $where . ' ORDER BY id LIMIT 25 OFFSET ' . $offset, $values);
+        $rows = $this->store()->all('SELECT id,table_name,source_key,payload,original_dates,relationships,exclusions,run_id,created_at,updated_at FROM whmcstofossbilling_archive WHERE ' . $where . ' ORDER BY id LIMIT 25 OFFSET ' . $offset, $values);
         foreach ($rows as &$row) {
             foreach (['payload', 'original_dates', 'relationships', 'exclusions'] as $field) {
                 $row[$field] = json_decode($row[$field], true, 128, JSON_THROW_ON_ERROR);
             }
-            $row['destinations'] = $this->store()->all('SELECT destination_entity,destination_id FROM whmcsmigrator_identity WHERE source_id=? AND table_name=? AND source_key=?', [$source, $row['table_name'], $row['source_key']]);
+            $row['destinations'] = $this->store()->all('SELECT destination_entity,destination_id FROM whmcstofossbilling_identity WHERE source_id=? AND table_name=? AND source_key=?', [$source, $row['table_name'], $row['source_key']]);
         }
 
         return ['records' => $rows, 'next_offset' => count($rows) === 25 ? $offset + 25 : null];

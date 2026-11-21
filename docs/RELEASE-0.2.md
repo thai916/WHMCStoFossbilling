@@ -1,9 +1,20 @@
-# 0.2 — Connection bug fixes, privilege validation and timezone selection
+# 0.2 — WHMCStoFossbilling experimental migration adapter
 
 **Experimental prerelease — not a production-complete migration tool.**
 
 Author: **Monlam Makhampa**. This extension is **vibe coded**.
 Direction: **WHMCS 8.x → FOSSBilling 0.8.9**.
+
+## Module rename
+
+The extension is now displayed as **WHMCStoFossbilling** and published as
+`WHMCStoFossbilling-0.2.zip`. FOSSBilling lowercases module IDs and applies
+`ucfirst()` for directory and class lookup, so the discovery-safe installation
+directory is `modules/Whmcstofossbilling/` on case-sensitive filesystems. The
+admin URL is `/admin/whmcstofossbilling`. Existing extension-owned
+`whmcsmigrator_*` tables are renamed to `whmcstofossbilling_*` on installation;
+stored source credentials remain decryptable. The old extension/permission entry
+is not reused: activate the newly named module and review its permissions.
 
 ## Connection bug fixes
 
@@ -61,9 +72,11 @@ Direction: **WHMCS 8.x → FOSSBilling 0.8.9**.
 
 ## Upgrade / important limits
 
-Replace the `modules/Whmcsmigrator/` directory with this release's directory.
-No new tables, Composer changes, FOSSBilling core edits or global TLS changes are
-required. Retest saved source connections to confirm the selected timezone and security diagnostics.
+Remove the old `modules/Whmcsmigrator/` directory and install this asset as
+`modules/Whmcstofossbilling/`, then activate **WHMCStoFossbilling** in Extensions.
+The first install renames extension-owned `whmcsmigrator_*` tables when the new
+names do not already exist; it never modifies core or business tables. No Composer
+changes, FOSSBilling core edits or global TLS changes are required. Retest saved source connections to confirm the selected timezone and security diagnostics.
 Uninstall is not rollback; preserve backups and audit records.
 
 All existing production blockers remain: active services, domains, unpaid/draft

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Destination;
+namespace Box\Mod\Whmcstofossbilling\Destination;
 
-use Box\Mod\Whmcsmigrator\Archive\Sanitizer;
-use Box\Mod\Whmcsmigrator\Finance\Decimal;
-use Box\Mod\Whmcsmigrator\Mapping\EventDate;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Archive\Sanitizer;
+use Box\Mod\Whmcstofossbilling\Finance\Decimal;
+use Box\Mod\Whmcstofossbilling\Mapping\EventDate;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 /** Atomic publication of a bounded historical invoice; never calls approval/payment APIs. */
 final class InvoiceImporter
@@ -26,11 +26,11 @@ final class InvoiceImporter
             'paid' => 'paid', 'cancelled', 'canceled' => 'canceled', 'refunded' => 'refunded',
             default => throw new SafeException('Unpaid/draft invoice import is blocked: core expiry cleanup ignores approval and can delete historical invoices. Source invoice remains archived.'),
         };
-        $cursor = $this->store->one('SELECT * FROM whmcsmigrator_cursor WHERE run_id=? AND table_name=?', [$run, $this->prefix . 'invoiceitems']);
+        $cursor = $this->store->one('SELECT * FROM whmcstofossbilling_cursor WHERE run_id=? AND table_name=?', [$run, $this->prefix . 'invoiceitems']);
         if (!$cursor || $cursor['status'] !== 'scanned' || (int) $cursor['failed'] !== 0 || $cursor['processed'] !== $cursor['expected']) {
             throw new SafeException('All selected invoice items must finish extraction without errors before native invoice publication.');
         }
-        $items = $this->store->all("SELECT a.source_key,a.payload,a.checksum FROM whmcsmigrator_snapshot_link l JOIN whmcsmigrator_snapshot a ON a.id=l.snapshot_id WHERE l.run_id=? AND l.table_name=? AND l.field_name='invoiceid' AND l.target_key=? ORDER BY a.id LIMIT 201", [$run, $this->prefix . 'invoiceitems', $key]);
+        $items = $this->store->all("SELECT a.source_key,a.payload,a.checksum FROM whmcstofossbilling_snapshot_link l JOIN whmcstofossbilling_snapshot a ON a.id=l.snapshot_id WHERE l.run_id=? AND l.table_name=? AND l.field_name='invoiceid' AND l.target_key=? ORDER BY a.id LIMIT 201", [$run, $this->prefix . 'invoiceitems', $key]);
         if (count($items) > 200) throw new SafeException('Large invoice requires staged native publication; no oversized aggregate was partially created.');
         if (!$items) throw new SafeException('Invoice has no extracted line items. Native publication refused.');
         if ($this->p->unchanged('invoices', $key, 'invoice', $checksum)) {
@@ -95,11 +95,11 @@ final class InvoiceImporter
             if ($stored['amount'] !== $amount) throw new SafeException('Destination floating storage changed a source line amount. Native invoice aggregate rolled back.');
             $this->p->track('invoiceitems', $item['source_key'], 'invoice_item', $lineId, $item['checksum'], $run);
             // The prior extraction disposition becomes native only when publication commits.
-            $attempt = $this->store->one('SELECT status FROM whmcsmigrator_attempt WHERE run_id=? AND table_name=? AND source_key=?', [$run, $this->prefix . 'invoiceitems', $item['source_key']]);
+            $attempt = $this->store->one('SELECT status FROM whmcstofossbilling_attempt WHERE run_id=? AND table_name=? AND source_key=?', [$run, $this->prefix . 'invoiceitems', $item['source_key']]);
             if ($attempt && in_array($attempt['status'], ['archived', 'skipped'], true)) {
                 $column = $attempt['status'];
-                $this->store->execute("UPDATE whmcsmigrator_cursor SET `$column`=`$column`-1,imported=imported+1 WHERE run_id=? AND table_name=?", [$run, $this->prefix . 'invoiceitems']);
-                $this->store->execute("UPDATE whmcsmigrator_attempt SET status='imported',updated_at=UTC_TIMESTAMP() WHERE run_id=? AND table_name=? AND source_key=?", [$run, $this->prefix . 'invoiceitems', $item['source_key']]);
+                $this->store->execute("UPDATE whmcstofossbilling_cursor SET `$column`=`$column`-1,imported=imported+1 WHERE run_id=? AND table_name=?", [$run, $this->prefix . 'invoiceitems']);
+                $this->store->execute("UPDATE whmcstofossbilling_attempt SET status='imported',updated_at=UTC_TIMESTAMP() WHERE run_id=? AND table_name=? AND source_key=?", [$run, $this->prefix . 'invoiceitems', $item['source_key']]);
             }
         }
         $stored = $this->store->one('SELECT CAST(credit AS DECIMAL(18,2)) AS amount FROM invoice WHERE id=?', [$id]);

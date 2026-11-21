@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Destination;
+namespace Box\Mod\Whmcstofossbilling\Destination;
 
-use Box\Mod\Whmcsmigrator\Finance\Decimal;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Finance\Decimal;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 final class ProductPricing
 {
@@ -31,14 +31,14 @@ final class ProductPricing
         $paymentId = $persistence->resolve($suffix, (string) $row['relid'], 'product_payment');
         $payment = $this->store->one('SELECT * FROM product_payment WHERE id=?', [$paymentId]);
         $matrix = $this->matrix($row, $payment['type']);
-        $previous = $this->store->one('SELECT * FROM whmcsmigrator_price WHERE source_id=? AND source_key=?', [$this->source, (string) $row['id']]);
+        $previous = $this->store->one('SELECT * FROM whmcstofossbilling_price WHERE source_id=? AND source_key=?', [$this->source, (string) $row['id']]);
         if ($previous) {
             if ($previous['checksum'] !== $checksum) throw new SafeException('Previously imported pricing changed. Native prices and existing price matrix were preserved pending approval.');
             if ($previous['native_applied']) $persistence->resolve('pricing', (string) $row['id'], 'product_payment');
 
             return 'skipped';
         }
-        $existing = $this->store->one('SELECT id FROM whmcsmigrator_price WHERE source_id=? AND product_id=? AND currency=?', [$this->source, $product, $currency['code']]);
+        $existing = $this->store->one('SELECT id FROM whmcstofossbilling_price WHERE source_id=? AND product_id=? AND currency=?', [$this->source, $product, $currency['code']]);
         if ($existing) throw new SafeException('Multiple source price rows target the same product/currency. No price was overwritten.');
         $default = $this->store->one('SELECT code FROM currency WHERE is_default=1 ORDER BY id');
         // No implicit exchange-rate conversion. Only the actual destination base currency has native price slots.
@@ -47,7 +47,7 @@ final class ProductPricing
             $persistence->update('product_payment', $paymentId, $matrix['native']);
             $persistence->track('pricing', (string) $row['id'], 'product_payment', $paymentId, $checksum, $run);
         }
-        $this->store->execute('INSERT INTO whmcsmigrator_price (source_id,source_key,product_id,currency,prices_json,native_applied,checksum,run_id) VALUES (?,?,?,?,?,?,?,?)', [$this->source, (string) $row['id'], $product, $currency['code'], Store::json($matrix['cycles']), (int) $native, $checksum, $run]);
+        $this->store->execute('INSERT INTO whmcstofossbilling_price (source_id,source_key,product_id,currency,prices_json,native_applied,checksum,run_id) VALUES (?,?,?,?,?,?,?,?)', [$this->source, (string) $row['id'], $product, $currency['code'], Store::json($matrix['cycles']), (int) $native, $checksum, $run]);
 
         return $native ? 'imported' : 'archived';
     }

@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Mapping;
+namespace Box\Mod\Whmcstofossbilling\Mapping;
 
-use Box\Mod\Whmcsmigrator\Destination\ProductPricing;
-use Box\Mod\Whmcsmigrator\Finance\Decimal;
-use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Destination\ProductPricing;
+use Box\Mod\Whmcstofossbilling\Finance\Decimal;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
 
 /** Pure eligibility/value checks. Not a claim that insertion/dependency resolution succeeds. */
 final class PreviewValidator

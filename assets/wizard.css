@@ -1,29 +1,29 @@
-#whmcsmigrator .wm-heading{display:flex;justify-content:space-between;gap:1rem;align-items:center;margin-bottom:1.25rem}
-#whmcsmigrator .wm-heading h2{margin:.35rem 0}
-#whmcsmigrator .wm-brand{display:flex;align-items:center;gap:1rem;min-width:0}
-#whmcsmigrator .wm-logo{flex:0 0 56px;object-fit:contain}
-#whmcsmigrator .wm-ip-address{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}
-#whmcsmigrator .wm-seal{border-left:4px solid #2fb344;padding:.5rem 1rem;display:flex;flex-direction:column;white-space:nowrap}
-#whmcsmigrator .wm-seal strong,#whmcsmigrator code{font-family:ui-monospace,Consolas,monospace}
-#whmcsmigrator .wm-seal span{font-size:.75rem;color:var(--tblr-secondary)}
-#whmcsmigrator .wm-steps{display:flex;gap:.5rem;flex-wrap:wrap}
-#whmcsmigrator .wm-search{width:auto;min-width:12rem;flex:1}
-#whmcsmigrator .wm-progress{width:100%;height:1rem;accent-color:#206bc4}
-#whmcsmigrator .wm-top-progress .progress{height:1.25rem}
-#whmcsmigrator .wm-top-progress .progress-bar{transition:width .2s ease}
-#whmcsmigrator .wm-top-progress span{overflow-wrap:anywhere}
-#whmcsmigrator .wm-mapping-table{min-width:900px}
-#whmcsmigrator .wm-mapping-table td{vertical-align:middle;white-space:normal}
-#whmcsmigrator details{margin-bottom:.5rem}
-#whmcsmigrator details>summary{cursor:pointer;font-weight:600;padding:.5rem 0}
-#whmcsmigrator pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:36rem;overflow:auto}
-#whmcsmigrator :focus-visible{outline:2px solid #206bc4;outline-offset:3px}
-#whmcsmigrator .wm-success{color:#0b5d2a!important;font-weight:700}
-#whmcsmigrator #wm-connection .row{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:1rem;margin:0}
-#whmcsmigrator #wm-connection .row>*{width:100%;margin:0;padding:0;grid-column:span 12}
-#whmcsmigrator #wm-connection .row>.col-md-3{grid-column:span 3}
-#whmcsmigrator #wm-connection .row>.col-md-4{grid-column:span 4}
-#whmcsmigrator #wm-connection .row>.col-md-6{grid-column:span 6}
-#whmcsmigrator #wm-connection .row>.col-md-8{grid-column:span 8}
-@media(max-width:767px){#whmcsmigrator #wm-connection .row>[class]{grid-column:span 12}}
-@media(max-width:640px){#whmcsmigrator .wm-heading{align-items:flex-start;flex-direction:column}#whmcsmigrator .wm-seal{white-space:normal}#whmcsmigrator .wm-steps .btn{flex:1 1 40%}}
+#whmcstofossbilling .wm-heading{display:flex;justify-content:space-between;gap:1rem;align-items:center;margin-bottom:1.25rem}
+#whmcstofossbilling .wm-heading h2{margin:.35rem 0}
+#whmcstofossbilling .wm-brand{display:flex;align-items:center;gap:1rem;min-width:0}
+#whmcstofossbilling .wm-logo{flex:0 0 56px;object-fit:contain}
+#whmcstofossbilling .wm-ip-address{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}
+#whmcstofossbilling .wm-seal{border-left:4px solid #2fb344;padding:.5rem 1rem;display:flex;flex-direction:column;white-space:nowrap}
+#whmcstofossbilling .wm-seal strong,#whmcstofossbilling code{font-family:ui-monospace,Consolas,monospace}
+#whmcstofossbilling .wm-seal span{font-size:.75rem;color:var(--tblr-secondary)}
+#whmcstofossbilling .wm-steps{display:flex;gap:.5rem;flex-wrap:wrap}
+#whmcstofossbilling .wm-search{width:auto;min-width:12rem;flex:1}
+#whmcstofossbilling .wm-progress{width:100%;height:1rem;accent-color:#206bc4}
+#whmcstofossbilling .wm-top-progress .progress{height:1.25rem}
+#whmcstofossbilling .wm-top-progress .progress-bar{transition:width .2s ease}
+#whmcstofossbilling .wm-top-progress span{overflow-wrap:anywhere}
+#whmcstofossbilling .wm-mapping-table{min-width:900px}
+#whmcstofossbilling .wm-mapping-table td{vertical-align:middle;white-space:normal}
+#whmcstofossbilling details{margin-bottom:.5rem}
+#whmcstofossbilling details>summary{cursor:pointer;font-weight:600;padding:.5rem 0}
+#whmcstofossbilling pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:36rem;overflow:auto}
+#whmcstofossbilling :focus-visible{outline:2px solid #206bc4;outline-offset:3px}
+#whmcstofossbilling .wm-success{color:#0b5d2a!important;font-weight:700}
+#whmcstofossbilling #wm-connection .row{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:1rem;margin:0}
+#whmcstofossbilling #wm-connection .row>*{width:100%;margin:0;padding:0;grid-column:span 12}
+#whmcstofossbilling #wm-connection .row>.col-md-3{grid-column:span 3}
+#whmcstofossbilling #wm-connection .row>.col-md-4{grid-column:span 4}
+#whmcstofossbilling #wm-connection .row>.col-md-6{grid-column:span 6}
+#whmcstofossbilling #wm-connection .row>.col-md-8{grid-column:span 8}
+@media(max-width:767px){#whmcstofossbilling #wm-connection .row>[class]{grid-column:span 12}}
+@media(max-width:640px){#whmcstofossbilling .wm-heading{align-items:flex-start;flex-direction:column}#whmcstofossbilling .wm-seal{white-space:normal}#whmcstofossbilling .wm-steps .btn{flex:1 1 40%}}

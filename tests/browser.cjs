@@ -68,7 +68,7 @@ const server = http.createServer((request, response) => {
     try {
         const page = await browser.newPage(), errors = [];
         page.on("pageerror", error => errors.push(error.message));
-        await page.route("**/api/admin/whmcsmigrator/**", async route => {
+        await page.route("**/api/admin/whmcstofossbilling/**", async route => {
             const request = route.request(), method = request.url().split("/").pop(), data = request.postDataJSON();
             requests.push(method);
             assert.equal(request.method(), "POST");
@@ -236,7 +236,7 @@ const server = http.createServer((request, response) => {
         assert.deepEqual(errors, [], "No browser JavaScript errors");
         console.log("PASS: synthetic browser wizard, standard no-TLS default plus all explicitly selected security modes, risk confirmations, conditional CA fields, explicit WHMCS timezone dropdown with America/Chicago default, dark-green success text, connection diagnostics, explicit public-IP controls, schema upgrade, top percentage progress bar, opt-in invalid-date policy, historical preview/resume with missing-randomUUID fallback, legacy search, financial displays, XSS protection, no browser storage, desktop/mobile layout");
         const livePage = await browser.newPage();
-        await livePage.goto("http://fossbill.test/admin/whmcsmigrator");
+        await livePage.goto("http://fossbill.test/admin/whmcstofossbilling");
         await livePage.waitForLoadState("networkidle");
         assert.match(await livePage.title(), /Login/i);
         console.log("PASS: unauthenticated real local admin page requires login");

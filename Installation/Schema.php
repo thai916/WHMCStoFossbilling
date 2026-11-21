@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Installation;
+namespace Box\Mod\Whmcstofossbilling\Installation;
 
 final class Schema
 {
     public static function install(\PDO $pdo): void
     {
-        if ($pdo->inTransaction()) throw new \Box\Mod\Whmcsmigrator\Security\SafeException('Extension schema installation requires no active destination transaction. No implicit commit was allowed.');
+        if ($pdo->inTransaction()) throw new \Box\Mod\Whmcstofossbilling\Security\SafeException('Extension schema installation requires no active destination transaction. No implicit commit was allowed.');
         $tables = [
             'source' => 'id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, fingerprint CHAR(64) NOT NULL UNIQUE, label VARCHAR(255) NOT NULL, credentials MEDIUMTEXT NOT NULL, schema_json LONGTEXT NOT NULL, mapping_json LONGTEXT NOT NULL, source_version VARCHAR(80) NULL, tested_at DATETIME NOT NULL, created_at DATETIME NOT NULL',
             'run' => "id CHAR(32) PRIMARY KEY, source_id BIGINT UNSIGNED NOT NULL, status VARCHAR(32) NOT NULL, mode VARCHAR(20) NOT NULL, schema_json LONGTEXT NOT NULL, mapping_json LONGTEXT NOT NULL, plan_json LONGTEXT NOT NULL, owner_id BIGINT NOT NULL, backup_reference VARCHAR(255) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, last_batch_at DATETIME NULL, INDEX(source_id)",
@@ -30,9 +30,31 @@ final class Schema
             'credit_result' => 'run_id CHAR(32) NOT NULL, source_key VARCHAR(30) NOT NULL, status VARCHAR(20) NOT NULL, message TEXT NULL, attempts INT NOT NULL DEFAULT 1, PRIMARY KEY(run_id,source_key)',
             'legacy_reference' => 'source_id BIGINT UNSIGNED NOT NULL, table_name VARCHAR(64) NOT NULL, source_key VARCHAR(30) NOT NULL, kind VARCHAR(20) NOT NULL, reference_hash CHAR(64) NOT NULL, PRIMARY KEY(source_id,table_name,source_key,kind), INDEX(source_id,kind,reference_hash)',
         ];
+        self::renameLegacyTables($pdo, array_keys($tables));
         foreach ($tables as $name => $columns) {
             // DDL is restricted to extension-owned tables; no core schema changes or global migrations.
-            $pdo->exec('CREATE TABLE IF NOT EXISTS `whmcsmigrator_' . $name . '` (' . $columns . ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+            $pdo->exec('CREATE TABLE IF NOT EXISTS `whmcstofossbilling_' . $name . '` (' . $columns . ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+        }
+    }
+
+    /** Carry extension-owned evidence over from the pre-rename release without touching core or business tables. */
+    private static function renameLegacyTables(\PDO $pdo, array $names): void
+    {
+        $params = [];
+        foreach ($names as $name) {
+            $params[] = 'whmcsmigrator_' . $name;
+            $params[] = 'whmcstofossbilling_' . $name;
+        }
+        $statement = $pdo->prepare('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (' . implode(',', array_fill(0, count($params), '?')) . ')');
+        $statement->execute($params);
+        $found = array_map('strtolower', array_column($statement->fetchAll(), 'TABLE_NAME'));
+        foreach ($names as $name) {
+            $legacy = 'whmcsmigrator_' . $name;
+            $current = 'whmcstofossbilling_' . $name;
+            // If both exist, leave the legacy table untouched for manual review; never overwrite newer data.
+            if (in_array($legacy, $found, true) && !in_array($current, $found, true)) {
+                $pdo->exec('RENAME TABLE `' . $legacy . '` TO `' . $current . '`');
+            }
         }
     }
 }

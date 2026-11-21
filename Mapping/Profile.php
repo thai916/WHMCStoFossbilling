@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Box\Mod\Whmcsmigrator\Mapping;
+namespace Box\Mod\Whmcstofossbilling\Mapping;
 
-use Box\Mod\Whmcsmigrator\Security\SafeException;
-use Box\Mod\Whmcsmigrator\Source\Catalog;
+use Box\Mod\Whmcstofossbilling\Security\SafeException;
+use Box\Mod\Whmcstofossbilling\Source\Catalog;
 
 final class Profile
 {

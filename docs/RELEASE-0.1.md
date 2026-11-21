@@ -5,7 +5,7 @@
 Author: **Monlam Makhampa**. This extension is **vibe coded** and requires
 independent security review before production use.
 
-Display name: **FOSSB to WHMCS Migrator**. Actual import direction:
+Display name: **WHMCStoFossbilling**. Actual import direction:
 **WHMCS 8.x → FOSSBilling 0.8.9**.
 
 ## Included
@@ -38,7 +38,7 @@ destination and a static/redacted source copy first.
 ## Installation and recovery
 
 Back up and verify restoration of the destination database. Extract the
-`Whmcsmigrator/` directory into FOSSBilling's `modules/`, then activate it in
+`Whmcstofossbilling/` directory into FOSSBilling's `modules/`, then activate it in
 Extensions. No Composer update or core modification is required.
 
 Existing preview installations may need **Upgrade extension tables only**.
