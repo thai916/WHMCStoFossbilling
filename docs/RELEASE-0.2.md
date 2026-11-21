@@ -70,6 +70,34 @@ is not reused: activate the newly named module and review its permissions.
   step. It measures scanning, not migration completion; exceptions and archive-only
   records stay visible in the run report.
 
+## Review, automatic analysis and preservation visibility
+
+- Review & preview uses a searchable three-column table list on desktop, two on
+  tablets and one on mobile. Filtering never changes the selection; eligible
+  tables still start selected. Excluded and review-required tables remain visible.
+- Before creating either kind of run, the wizard asks the server to expand the
+  selected mode's dependencies and identify missing, stale (one hour) or
+  schema-mismatched counts. It automatically refreshes only those tables through
+  the existing read-only analysis endpoint, one request per table. Both preparation
+  and analysis retain the configure permission; run creation retains execute.
+- The planner still enforces freshness and schema checks. Direct API callers must
+  prepare/analyze before creating a run; preparation is not permission to import.
+  Schema-change errors name the table being analyzed and the wizard lists the
+  remaining counts needing refresh. Retest the connection and review a new plan.
+- Successful and failed run creation scroll to the page top. Successful runs
+  show their progress immediately and stay paused until explicitly resumed.
+- The less cluttered interface separates selection, preview and authorization.
+  Run summaries distinguish native imports, archive-only outcomes and exceptions;
+  dry-run summaries explicitly say that history has not been saved.
+
+The priority is maximum safe preservation of client history, not just native
+publication. Supported records are archived before native adapters run, so a
+native adapter failure does not discard the already-preserved source evidence.
+This update does not add new extractors or claim complete history coverage:
+secrets remain excluded/redacted, and custom-field values, attachments, unknown
+tables, binary/oversized records and other unsupported cases still require review.
+Archive-only history is private legacy evidence, not a native client-portal view.
+
 ## Upgrade / important limits
 
 Remove the old `modules/Whmcsmigrator/` directory and install this asset as

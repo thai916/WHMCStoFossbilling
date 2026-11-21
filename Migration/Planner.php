@@ -22,7 +22,7 @@ final class Planner
         'A live source is not a consistent multi-request snapshot. Final cutover reconciliation is required.',
     ];
 
-    public static function build(Store $store, int $source, array $schema, array $selection): array
+    public static function analysisIssues(Store $store, int $source, array $schema, array $selection): array
     {
         if ($selection === []) {
             throw new SafeException('Select at least one source table.');
@@ -31,15 +31,37 @@ final class Planner
         if ($unknown) {
             throw new SafeException('The selection contains an unknown table.');
         }
-        $tables = [];
+        $issues = [];
+        $checksum = hash('sha256', Store::json($schema));
         foreach ($selection as $name) {
             $definition = $schema[$name];
             if ($definition['classification'] !== 'archive') {
                 throw new SafeException('A selected table is sensitive, unsupported, or requires a reviewed extractor.');
             }
+            $analysis = $store->one('SELECT *, analyzed_at > UTC_TIMESTAMP() - INTERVAL 1 HOUR AS fresh FROM whmcstofossbilling_analysis WHERE source_id=? AND table_name=?', [$source, $name]);
+            if (!$analysis) $issues[$name] = 'missing';
+            elseif ($analysis['schema_checksum'] !== $checksum) $issues[$name] = 'schema changed';
+            elseif (!(int) $analysis['fresh']) $issues[$name] = 'stale';
+        }
+
+        return $issues;
+    }
+
+    public static function build(Store $store, int $source, array $schema, array $selection): array
+    {
+        $issues = self::analysisIssues($store, $source, $schema, $selection);
+        if ($issues) {
+            $names = [];
+            foreach ($issues as $name => $reason) $names[] = $name . ' (' . $reason . ')';
+            throw new SafeException('Source counts need refreshing: ' . implode(', ', $names) . '. Analyze these tables again. If the schema changed, test the connection first.');
+        }
+        $tables = [];
+        foreach ($selection as $name) {
+            $definition = $schema[$name];
+            // Recheck at use time as well: preparation never replaces the hard freshness gate.
             $analysis = $store->one('SELECT * FROM whmcstofossbilling_analysis WHERE source_id=? AND table_name=? AND analyzed_at > UTC_TIMESTAMP() - INTERVAL 1 HOUR', [$source, $name]);
             if (!$analysis || $analysis['schema_checksum'] !== hash('sha256', Store::json($schema))) {
-                throw new SafeException('Source counts are missing, stale or based on a different schema. Analyze the selected tables again.');
+                throw new SafeException('Source counts need refreshing: ' . $name . '. Analyze this table again; if the schema changed, test the connection first.');
             }
             $tables[$name] = [
                 'category' => Catalog::category($definition['suffix']),

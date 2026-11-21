@@ -27,12 +27,20 @@ const schema = {
     tblconfiguration: { suffix: "configuration", key: "id", classification: "excluded_sensitive", columns: { value: { type: "text", sensitive: false } } }
 };
 const profile = { version: 1, fields: { tblclients: { id: { action: "archive", target: null, transform: "identity", reason: "" }, email: { action: "native_and_archive", target: "email", transform: "identity", reason: "" }, password: { action: "exclude_sensitive", target: null, transform: "identity", reason: "" } }, tblconfiguration: { value: { action: "exclude_sensitive", target: null, transform: "identity", reason: "" } } } };
+// A genuinely long list catches layout and scrolling regressions hidden by a one-row fixture.
+for (const suffix of ["currencies", ...Array.from({ length: 40 }, (_, i) => `history_${i}_long_table_name`)]) {
+    const name = `tbl${suffix}`;
+    schema[name] = { suffix, key: "id", classification: "archive", columns: { id: { type: "int", sensitive: false } } };
+    profile.fields[name] = { id: { action: "archive", target: null, transform: "identity", reason: "" } };
+}
 const source = {
     source_id: 1, label: "synthetic-fixture", version: "8.10.1", schema, profile, native_client_targets: ["email", "first_name"],
     analysis: [], blockers: ["Native operational imports are blocked."],
     fields: Object.entries(schema).flatMap(([table, def]) => Object.entries(def.columns).map(([field, col]) => ({ category: "Synthetic fixture", table, field, type: col.type, required: field === "id", classification: def.classification, ...profile.fields[table][field] })))
 };
 let currentRun = null;
+let failNextCreation = false, failNextAnalysis = false;
+const analyzedTables = new Set();
 let schemaUpgradeRequired = true;
 let ipLookups = 0;
 const historicalRunId = "b".repeat(32);
@@ -103,11 +111,32 @@ const server = http.createServer((request, response) => {
                     result = { ip: "8.8.8.8", provider: "https://api.ipify.org", checked_at: "2026-01-01 00:00:00" }; break;
                 case "mapping_get": result = source; break;
                 case "mapping_save": result = { profile: data.profile, validated: true }; break;
-                case "analyze_table": result = { table: data.table, count: 1, maximum: "1" }; break;
+                case "analysis_prepare": {
+                    const tables = [...new Set([...data.tables, ...(data.target_mode !== "archive" && data.tables.includes("tblclients") ? ["tblcurrencies"] : [])])];
+                    result = { tables, issues: Object.fromEntries(tables.filter(name => !analyzedTables.has(name)).map(name => [name, "missing"])) };
+                    break;
+                }
+                case "analyze_table":
+                    if (failNextAnalysis) {
+                        failNextAnalysis = false;
+                        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ error: { message: `The source schema changed while analyzing ${data.table}. Test the connection again.` } }) });
+                        return;
+                    }
+                    analyzedTables.add(data.table);
+                    result = { table: data.table, count: 1, maximum: "1" }; break;
                 case "run_create":
-                    assert.equal(data.mode, "dry_run", "Browser suite never authorizes a real import");
-                    assert.equal(data.target_mode, "historical_native", "Preview keeps the explicitly selected target mode");
-                    assert.equal(data.invalid_date_fallback, "1900", "Explicit invalid-date policy is submitted with the run plan");
+                    if (failNextCreation) {
+                        failNextCreation = false;
+                        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ error: { message: "Source counts need refreshing: tblclients (stale), tblcurrencies (missing). Analyze these tables again." } }) });
+                        return;
+                    }
+                    if (data.mode === "dry_run") {
+                        assert.equal(data.target_mode, "historical_native", "Preview keeps the explicitly selected target mode");
+                        assert.equal(data.invalid_date_fallback, "1900", "Explicit invalid-date policy is submitted with the run plan");
+                    } else {
+                        assert.equal(data.mode, "archive", "Authorized run uses a synthetic API only; no live writes");
+                        assert.equal(data.confirmation, "PRESERVE HISTORY");
+                    }
                     currentRun = { id: "a".repeat(32), mode: data.mode, status: "paused", last_batch_at: null, categories: [{ table_name: "tblclients", expected: 1, processed: 0, imported: 0, archived: 0, skipped: 0, failed: 0 }], errors: [], reconciliation: { reason: "Not performed" } };
                     result = currentRun; break;
                 case "run_control": currentRun.status = data.action === "resume" ? "running" : "paused"; result = currentRun; break;
@@ -191,13 +220,37 @@ const server = http.createServer((request, response) => {
         await page.locator("#wm-field-search").fill("");
         await page.locator("#wm-review").click();
         await page.locator("#wm-analyze").click();
-        await page.getByText("Selected table counts captured.", { exact: false }).waitFor();
+        await page.getByText("Selected table counts captured, including required dependencies.", { exact: false }).waitFor();
         assert.equal(await page.locator('#wm-tables input[value="tblconfiguration"]').isDisabled(), true);
+        assert.equal(await page.locator("#wm-tables").evaluate(el => getComputedStyle(el).gridTemplateColumns.split(" ").length), 3, "Desktop table list uses three columns");
+        const selectedBeforeSearch = await page.locator("#wm-tables input:checked").count();
+        await page.locator("#wm-table-search").fill("tblclients");
+        assert.equal(await page.locator(".wm-table-row:visible").count(), 1);
+        assert.equal(await page.locator("#wm-tables input:checked").count(), selectedBeforeSearch, "Filtering never changes preservation selection");
+        await page.locator("#wm-table-search").fill("not-a-table");
+        assert.equal(await page.locator("#wm-table-empty").isVisible(), true);
+        await page.locator("#wm-table-search").fill("");
+        await page.setViewportSize({ width: 900, height: 844 });
+        assert.equal(await page.locator("#wm-tables").evaluate(el => getComputedStyle(el).gridTemplateColumns.split(" ").length), 2, "Tablet table list uses two columns");
+        await page.setViewportSize({ width: 390, height: 844 });
+        assert.equal(await page.locator("#wm-tables").evaluate(el => getComputedStyle(el).gridTemplateColumns.split(" ").length), 1, "Mobile table list uses one column");
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Long mobile table names do not overflow");
+        await page.screenshot({ path: path.join(artifacts, "mobile-review.png"), fullPage: true });
+        await page.setViewportSize({ width: 1365, height: 1000 });
+        await page.screenshot({ path: path.join(artifacts, "desktop-review.png"), fullPage: true });
+        // Only select clients; native dependency counts must be refreshed automatically.
+        for (const checkbox of await page.locator("#wm-tables input:not(:disabled)").all()) await checkbox.uncheck();
+        await page.locator('#wm-tables input[value="tblclients"]').check();
+        analyzedTables.delete("tblcurrencies");
         await page.locator("#wm-mode").selectOption("historical_native");
         await page.locator("#wm-invalid-date-fallback").check();
         await page.locator("#wm-dry-run").click();
         assert.equal(requests.includes("run_batch"), false, "Preview creation cannot start scheduling before explicit Resume");
         await page.locator("#wm-top-progress").waitFor({ state: "visible" });
+        await page.waitForFunction(() => !document.getElementById("wm-dry-run").disabled && window.scrollY === 0);
+        assert.equal(await page.evaluate(() => window.scrollY), 0, "Dry-run creation scrolls to top");
+        assert.match(await page.locator("#wm-notice").innerText(), /counts refreshed for: tblcurrencies/);
+        assert.equal(await page.locator('#wm-tables input[value="tblcurrencies"]').isChecked(), true, "Expanded dependencies remain selected for review");
         assert.equal(await page.locator("#wm-top-progress").isVisible(), true, "Top progress bar appears as soon as a run exists");
         assert.equal(await page.locator("#wm-progress-percent").innerText(), "0%", "A newly created run starts at zero percent");
         assert.match(await page.locator("#wm-progress-label").innerText(), /dry_run · paused · 0\/1 records scanned/);
@@ -211,6 +264,38 @@ const server = http.createServer((request, response) => {
         assert.equal(await page.locator("#wm-top-progress [role=progressbar]").getAttribute("aria-valuenow"), "100");
         assert.match(await page.locator("#wm-progress-label").innerText(), /preview_finished · 1\/1 records scanned/);
         assert.match(await page.locator("#wm-date-fallbacks").innerText(), /No invalid date was substituted/);
+        assert.equal(await page.locator("#wm-archive-total").innerText(), "Not saved", "Preview counts never claim history was saved");
+        await page.locator('[data-step="analysis"]').click();
+        await page.locator("#wm-mode").selectOption("archive");
+        await page.locator("#wm-backup").fill("Synthetic browser fixture — not a real authorization");
+        await page.locator('[name="backup_verified"]').check();
+        await page.locator('[name="accept_limitations"]').check();
+        await page.locator("#wm-confirm").fill("PRESERVE HISTORY");
+        const batchesBeforeAuthorization = requests.filter(name => name === "run_batch").length;
+        const authorize = page.getByRole("button", { name: "Create authorized run (starts paused)", exact: true });
+        failNextAnalysis = true;
+        analyzedTables.delete("tblclients");
+        await authorize.click();
+        await page.getByText("Counts still need refreshing for: tblclients", { exact: false }).waitFor();
+        await page.waitForFunction(() => window.scrollY === 0);
+        assert.match(await page.locator("#wm-notice").innerText(), /schema changed.*tblclients/);
+        assert.equal(await page.evaluate(() => window.scrollY), 0, "Schema-change failure scrolls to top");
+        failNextCreation = true;
+        await authorize.click();
+        await page.getByText("tblclients (stale), tblcurrencies (missing)", { exact: false }).waitFor();
+        await page.waitForFunction(() => window.scrollY === 0);
+        assert.equal(await page.evaluate(() => window.scrollY), 0, "Authorized-run failure scrolls to top");
+        await authorize.click();
+        await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("archive · paused"));
+        await page.waitForFunction(() => window.scrollY === 0);
+        assert.equal(await page.evaluate(() => window.scrollY), 0, "Authorized-run success scrolls to top");
+        assert.equal(requests.filter(name => name === "run_batch").length, batchesBeforeAuthorization, "Authorized creation remains paused without scheduling batches");
+        assert.equal(await page.locator("#wm-top-progress").evaluate(el => { const box = el.getBoundingClientRect(); return box.top >= 0 && box.bottom <= window.innerHeight; }), true, "Authorized-run progress is in the viewport after creation");
+        await page.screenshot({ path: path.join(artifacts, "preservation-progress.png"), fullPage: true });
+        currentRun.categories[0].expected = 0;
+        await page.locator("#wm-refresh").click();
+        await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("0/0 records scanned"));
+        assert.equal(await page.locator("#wm-progress-percent").innerText(), "0%", "An empty source stays at zero percent");
         await page.locator('[data-step="archive"]').click();
         await page.locator('[name="legacy_reference"]').fill("LEGACY-001");
         await page.locator("#wm-archive-search button").click();
@@ -234,7 +319,7 @@ const server = http.createServer((request, response) => {
         await page.screenshot({ path: path.join(artifacts, "mobile.png"), fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile connection page has no horizontal overflow");
         assert.deepEqual(errors, [], "No browser JavaScript errors");
-        console.log("PASS: synthetic browser wizard, standard no-TLS default plus all explicitly selected security modes, risk confirmations, conditional CA fields, explicit WHMCS timezone dropdown with America/Chicago default, dark-green success text, connection diagnostics, explicit public-IP controls, schema upgrade, top percentage progress bar, opt-in invalid-date policy, historical preview/resume with missing-randomUUID fallback, legacy search, financial displays, XSS protection, no browser storage, desktop/mobile layout");
+        console.log("PASS: synthetic browser wizard, connection modes/timezone/security controls, 43-table responsive 3/2/1-column review, selection-safe search, automatic dependency analysis, schema-change and stale-count diagnostics, successful/failed authorized creation scroll and visible progress without batch scheduling, preservation/preview summaries, zero-expected progress, opt-in invalid-date policy, preview/resume with missing-randomUUID fallback, legacy search, financial displays, XSS protection and no browser storage");
         const livePage = await browser.newPage();
         await livePage.goto("http://fossbill.test/admin/whmcstofossbilling");
         await livePage.waitForLoadState("networkidle");

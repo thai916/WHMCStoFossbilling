@@ -19,6 +19,40 @@
 #whmcstofossbilling pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:36rem;overflow:auto}
 #whmcstofossbilling :focus-visible{outline:2px solid #206bc4;outline-offset:3px}
 #whmcstofossbilling .wm-success{color:#0b5d2a!important;font-weight:700}
+#whmcstofossbilling{--wm-ink:#243447;--wm-blue:#206bc4;--wm-wash:#eef4fb;--wm-paper:#fff;--wm-green:#0b5d2a;--wm-amber:#946200}
+#whmcstofossbilling h2,#whmcstofossbilling h3,#whmcstofossbilling h4{font-family:Bahnschrift,"Segoe UI",sans-serif;letter-spacing:-.02em}
+#whmcstofossbilling .card-header{justify-content:space-between;gap:1rem;flex-wrap:wrap}
+#whmcstofossbilling .wm-section-caption{font-size:.8rem;color:var(--tblr-secondary)}
+#whmcstofossbilling .card-body{padding:1.5rem}
+#whmcstofossbilling .wm-review-intro{display:grid;grid-template-columns:1fr 1fr;gap:2rem;align-items:center;margin-bottom:1.5rem}
+#whmcstofossbilling .wm-review-intro p,#whmcstofossbilling .wm-authorization-heading p{color:var(--tblr-secondary);margin-bottom:0;max-width:65ch}
+#whmcstofossbilling .wm-table-toolbar{display:flex;justify-content:space-between;align-items:end;gap:1rem;margin-bottom:.75rem}
+#whmcstofossbilling .wm-table-search{flex:0 1 24rem}
+#whmcstofossbilling .wm-selection-summary{text-align:right;font-size:.8rem;color:var(--tblr-secondary)}
+#whmcstofossbilling .wm-table-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem}
+#whmcstofossbilling .wm-table-row{display:flex;gap:.65rem;align-items:flex-start;padding:.75rem;background:var(--tblr-bg-surface,var(--wm-paper));border:1px solid var(--tblr-border-color);border-radius:6px;min-width:0;cursor:pointer}
+#whmcstofossbilling .wm-table-row:has(input:checked){border-left:3px solid var(--wm-blue);padding-left:calc(.75rem - 2px)}
+#whmcstofossbilling .wm-table-row:has(input:disabled){background:var(--tblr-bg-surface-secondary);cursor:default}
+#whmcstofossbilling .wm-table-row[hidden]{display:none}
+#whmcstofossbilling .wm-table-row input{flex:0 0 auto;margin:2px 0 0}
+#whmcstofossbilling .wm-table-copy{min-width:0}
+#whmcstofossbilling .wm-table-name{display:block;font-family:Consolas,ui-monospace,monospace;font-size:.8rem;overflow-wrap:anywhere}
+#whmcstofossbilling .wm-table-meta{display:block;color:var(--tblr-secondary);font-size:.75rem;margin-top:.2rem}
+#whmcstofossbilling .wm-analysis-actions{display:flex;gap:1.5rem;align-items:center;justify-content:space-between;margin:1rem 0 1.75rem}
+#whmcstofossbilling .wm-analysis-actions p{flex:0 1 29rem;color:var(--tblr-secondary);font-size:.8rem;margin:0}
+#whmcstofossbilling #wm-authorize{border-top:1px solid var(--tblr-border-color);padding-top:1.5rem}
+#whmcstofossbilling #wm-authorize>.form-check{padding-top:.3rem;padding-bottom:.3rem}
+#whmcstofossbilling .wm-preservation-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--tblr-border-color);border:1px solid var(--tblr-border-color);border-radius:6px;overflow:hidden;margin:1.5rem 0}
+#whmcstofossbilling .wm-preservation-summary>div{display:flex;flex-direction:column;padding:1rem;background:var(--tblr-bg-surface,var(--wm-paper));border-top:3px solid var(--wm-blue)}
+#whmcstofossbilling .wm-preservation-summary>div:first-child{border-top-color:var(--wm-green)}
+#whmcstofossbilling .wm-preservation-summary>div:last-child{border-top-color:var(--wm-amber)}
+#whmcstofossbilling .wm-preservation-summary span{font-weight:600}
+#whmcstofossbilling .wm-preservation-summary strong{font:1.75rem Consolas,ui-monospace,monospace;margin:.35rem 0}
+#whmcstofossbilling .wm-preservation-summary small{color:var(--tblr-secondary)}
+@media(max-width:1100px){#whmcstofossbilling .wm-table-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:767px){#whmcstofossbilling .wm-review-intro{grid-template-columns:1fr;gap:1rem}#whmcstofossbilling .wm-analysis-actions{align-items:flex-start;flex-direction:column;gap:.75rem}#whmcstofossbilling .wm-analysis-actions p{flex:auto}#whmcstofossbilling .card-body{padding:1rem}}
+@media(max-width:540px){#whmcstofossbilling .wm-table-grid,#whmcstofossbilling .wm-preservation-summary{grid-template-columns:1fr}#whmcstofossbilling .wm-table-toolbar{align-items:stretch;flex-direction:column}#whmcstofossbilling .wm-table-search{flex:auto}#whmcstofossbilling .wm-selection-summary{text-align:left}}
+@media(prefers-reduced-motion:reduce){#whmcstofossbilling .wm-top-progress .progress-bar{transition:none}}
 #whmcstofossbilling #wm-connection .row{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:1rem;margin:0}
 #whmcstofossbilling #wm-connection .row>*{width:100%;margin:0;padding:0;grid-column:span 12}
 #whmcstofossbilling #wm-connection .row>.col-md-3{grid-column:span 3}

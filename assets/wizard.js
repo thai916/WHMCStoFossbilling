@@ -4,7 +4,7 @@
     const root = document.getElementById("whmcstofossbilling");
     if (!root) return;
     const $ = id => document.getElementById(`wm-${id}`);
-    let source = null, profile = null, defaultProfile = null, run = null, pumping = false;
+    let source = null, profile = null, defaultProfile = null, run = null, pumping = false, preparing = false;
     const counts = new Map();
     function batchRequestId() {
         const webcrypto = globalThis.crypto;
@@ -277,35 +277,94 @@
         $("tables").replaceChildren();
         if (!source) return;
         Object.entries(source.schema).forEach(([name, definition]) => {
-            const label = element("label", undefined, "form-check mb-2");
+            const label = element("label", undefined, "wm-table-row");
+            label.dataset.tableName = name;
             const checkbox = element("input", undefined, "form-check-input");
             checkbox.type = "checkbox"; checkbox.value = name; checkbox.name = "table";
             checkbox.disabled = definition.classification !== "archive"; checkbox.checked = !checkbox.disabled;
-            const text = element("span", `${name} · ${definition.classification}${counts.has(name) ? ` · ${counts.get(name)} records` : ""}`, "form-check-label");
+            const copy = element("span", undefined, "wm-table-copy");
+            const title = element("span", name, "wm-table-name");
+            const status = { archive: "Eligible", excluded_sensitive: "Excluded · sensitive", requires_review: "Needs extractor review", unsupported_key: "Unsupported key" }[definition.classification] || definition.classification;
+            label.dataset.status = status;
+            const text = element("span", `${status} · ${counts.has(name) ? `${counts.get(name)} records` : "Not analyzed"}`, "wm-table-meta");
             text.dataset.tableCount = name;
-            label.append(checkbox, text); $("tables").append(label);
+            copy.append(title, text); label.append(checkbox, copy); $("tables").append(label);
         });
+        filterTables();
     }
     const selectedTables = () => [...$("tables").querySelectorAll('input:checked')].map(node => node.value);
-    $("analyze").addEventListener("click", handle(async () => {
-        if (!source) throw new Error("Select a source first.");
-        const tables = selectedTables();
+    function filterTables() {
+        const query = $("table-search").value.trim().toLowerCase();
+        const rows = [...$("tables").querySelectorAll(".wm-table-row")];
+        rows.forEach(row => { row.hidden = !`${row.dataset.tableName} ${row.dataset.status}`.toLowerCase().includes(query); });
+        const available = rows.filter(row => !row.querySelector("input").disabled).length;
+        $("selection-summary").textContent = `${selectedTables().length} / ${available} eligible tables selected · ${rows.filter(row => !row.hidden).length} shown · ${rows.length - available} excluded / need review`;
+        $("table-empty").classList.toggle("d-none", rows.some(row => !row.hidden));
+    }
+    $("table-search").addEventListener("input", filterTables);
+    $("tables").addEventListener("change", filterTables);
+    async function analyzeTables(tables, sourceId) {
         for (let index = 0; index < tables.length; index++) {
+            if (source?.source_id !== sourceId) throw new Error("The selected source changed. Review the source and tables before trying again. No run was created.");
             const table = tables[index];
             notice(`Analyzing ${index + 1}/${tables.length}: ${table}. One read-only request per table.`);
-            const result = await api("analyze_table", { source_id: source.source_id, table });
+            let result;
+            try {
+                result = await api("analyze_table", { source_id: sourceId, table });
+            } catch (error) {
+                throw new Error(`${error.message} Counts still need refreshing for: ${tables.slice(index).join(", ")}. No run was created. Test the connection again if the schema changed.`);
+            }
             counts.set(table, result.count);
             const node = [...$("tables").querySelectorAll("[data-table-count]")].find(item => item.dataset.tableCount === table);
-            if (node) node.textContent = `${table} · archive · ${result.count} records`;
+            if (node) node.textContent = `Eligible · ${result.count} records`;
         }
-        notice("Selected table counts captured. They are not a transactionally consistent whole-database snapshot.");
+    }
+    async function prepareCounts(selection, target, force = false) {
+        const sourceId = source.source_id;
+        const prepared = await api("analysis_prepare", { source_id: sourceId, tables: selection, target_mode: target });
+        if (source?.source_id !== sourceId) throw new Error("The selected source changed. Review the source and tables before trying again. No run was created.");
+        const tables = force ? prepared.tables : Object.keys(prepared.issues);
+        const dependencies = prepared.tables.filter(table => !selection.includes(table));
+        // Required dependencies remain visible and selected for the administrator's review.
+        for (const node of $("tables").querySelectorAll("input")) {
+            if (dependencies.includes(node.value) && !node.disabled) node.checked = true;
+        }
+        filterTables();
+        if (tables.length) {
+            notice(`Refreshing read-only counts for ${tables.length} tables, including required dependencies. No import is starting.`);
+            await analyzeTables(tables, sourceId);
+        }
+        return { refreshed: tables, dependencies };
+    }
+    $("analyze").addEventListener("click", handle(async () => {
+        if (!source) throw new Error("Select a source first.");
+        if (preparing) throw new Error("Wait for the current analysis or run preparation to finish.");
+        preparing = true;
+        try {
+            await prepareCounts(selectedTables(), $("mode").value, true);
+            notice("Selected table counts captured, including required dependencies. They are not a transactionally consistent whole-database snapshot.");
+        } finally { preparing = false; }
     }));
     async function createRun(mode, extra = {}) {
-        if (!source) throw new Error("Select a source first.");
-        await saveMapping();
-        run = await api("run_create", { source_id: source.source_id, tables: selectedTables(), mode, target_mode: $("mode").value, ...extra });
-        await dashboard(); renderRun(); step("progress");
-        notice("Run created paused. Review its mode and expected counts, then explicitly resume.");
+        if (preparing) return;
+        preparing = true;
+        try {
+            if (!source) throw new Error("Select a source first.");
+            const sourceId = source.source_id, selection = selectedTables(), target = mode === "dry_run" ? $("mode").value : mode;
+            await saveMapping();
+            if (source?.source_id !== sourceId) throw new Error("The selected source changed. Review the source and tables before trying again. No run was created.");
+            const prepared = await prepareCounts(selection, target);
+            if (source?.source_id !== sourceId) throw new Error("The selected source changed. Review the source and tables before trying again. No run was created.");
+            run = await api("run_create", { source_id: sourceId, tables: selection, mode, ...extra, target_mode: target });
+            // Reveal the successful run even if refreshing the dashboard subsequently fails.
+            renderRun(); step("progress");
+            window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+            notice(`Run created paused. Review its mode and expected counts, then explicitly resume.${prepared.refreshed.length ? ` Read-only counts refreshed for: ${prepared.refreshed.join(", ")}.` : ""}${prepared.dependencies.length ? ` Required dependencies included: ${prepared.dependencies.join(", ")}.` : ""}`);
+            await dashboard();
+        } finally {
+            preparing = false;
+            window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        }
     }
     $("dry-run").addEventListener("click", handle(async () => createRun("dry_run", { invalid_date_fallback: $("invalid-date-fallback").checked ? "1900" : "" })));
     $("authorize").addEventListener("submit", handle(async () => {
@@ -337,6 +396,9 @@
         $("run-summary").replaceChildren(element("h4", `${run.mode} · ${run.status}`), element("p", `Run ${run.id} · ${processed}/${expected} scanned (${percent}%) · Last batch ${run.last_batch_at || "not started"} UTC`), element("p", run.reconciliation.reason, "text-warning"));
         $("progress").value = percent;
         const preview = run.mode === "dry_run";
+        $("native-total").textContent = preview ? "Preview only" : String(run.categories.reduce((sum, row) => sum + Number(row.imported), 0));
+        $("archive-total").textContent = preview ? "Not saved" : String(run.categories.reduce((sum, row) => sum + Number(row.archived), 0));
+        $("failed-total").textContent = String(run.categories.reduce((sum, row) => sum + Number(row.failed), 0));
         $("counts").replaceChildren(dataTable(["Source table", "Expected", "Scanned", "Native imported", preview ? "Previewed" : "Archive only", "Unchanged / linked", "Failed"], run.categories.map(row => [row.table_name, row.expected, row.processed, row.imported, row.archived, row.skipped, row.failed])));
         const fallbacks = run.date_fallbacks || [];
         $("date-fallbacks").replaceChildren(fallbacks.length

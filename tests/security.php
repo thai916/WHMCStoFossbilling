@@ -11,11 +11,12 @@ use Symfony\Component\HttpFoundation\Request;
 if (!defined('SYSTEM_URL')) define('SYSTEM_URL', 'http://fossbill.test/');
 $staff = new class {
     public bool $allow = true;
+    public array $deniedPermissions = [];
     public int $checks = 0;
     public function checkPermissionsAndThrowException(...$arguments): void
     {
         ++$this->checks;
-        if (!$this->allow) throw new \FOSSBilling\InformationException('Permission denied', null, 403);
+        if (!$this->allow || in_array($arguments[1] ?? '', $this->deniedPermissions, true)) throw new \FOSSBilling\InformationException('Permission denied', null, 403);
     }
 };
 $service = new class {
@@ -47,7 +48,7 @@ $denied = static function (callable $operation, string $label): void {
         expect(true, $label);
     }
 };
-foreach (['dashboard', 'schema_upgrade', 'public_ip', 'test_connection', 'timezone_confirm', 'mapping_get', 'mapping_save', 'analyze_table', 'run_create', 'run_status', 'run_control', 'run_batch', 'run_retry', 'archive_search', 'report_export'] as $endpoint) {
+foreach (['dashboard', 'schema_upgrade', 'public_ip', 'test_connection', 'timezone_confirm', 'mapping_get', 'mapping_save', 'analysis_prepare', 'analyze_table', 'run_create', 'run_status', 'run_control', 'run_batch', 'run_retry', 'archive_search', 'report_export'] as $endpoint) {
     $request = Request::create(SYSTEM_URL . 'api/admin/whmcstofossbilling/' . $endpoint, 'POST');
     $denied(fn () => $newApi($request)->{$endpoint}([]), $endpoint . ' rejects missing CSRF before service execution');
 }
@@ -62,6 +63,10 @@ $denied(fn () => $newApi($request, new \FOSSBilling\Identity\Guest())->dashboard
 $staff->allow = false;
 $denied(fn () => $newApi($request)->dashboard([]), 'Explicit endpoint permission denial respected');
 $staff->allow = true;
+$staff->deniedPermissions = ['configure'];
+$denied(fn () => $newApi($request)->analysis_prepare([]), 'Execute permission alone cannot prepare automatic analysis');
+$denied(fn () => $newApi($request)->analyze_table([]), 'Automatic refresh retains configure permission on each table request');
+$staff->deniedPermissions = [];
 expect($newApi($request)->dashboard([]) === ['environment' => [], 'schema_upgrade_required' => false, 'sources' => [], 'runs' => []], 'Session-bound admin request accepted');
 $denied(fn () => $newApi($request)->public_ip([]), 'Public-IP lookup requires explicit external-request confirmation before network access');
 $denied(fn () => $newApi($request)->timezone_confirm([]), 'Timezone override requires explicit application-timezone confirmation');

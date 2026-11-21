@@ -102,6 +102,11 @@ final class Admin extends \FOSSBilling\Api\AbstractApi
         return $this->guarded('configure', fn (): array => $this->getService()->analyze((int) ($data['source_id'] ?? 0), (string) ($data['table'] ?? '')));
     }
 
+    public function analysis_prepare(array $data): array
+    {
+        return $this->guarded('configure', fn (): array => $this->getService()->prepareAnalysis($data));
+    }
+
     public function run_create(array $data): array
     {
         return $this->guarded('execute', function () use ($data): array {

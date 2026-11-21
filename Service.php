@@ -190,12 +190,29 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         $definition = $schema[$name] ?? throw new SafeException('Unknown source table.');
         $reader = new Reader($this->vault()->open($row['credentials']));
         if (Store::json($reader->inspect()) !== $row['schema_json']) {
-            throw new SafeException('The source schema changed. Test the connection again.');
+            throw new SafeException('The source schema changed while analyzing ' . $name . '. Counts for this table cannot be refreshed. Test the connection again, then review and analyze the selected tables.');
         }
         $bounds = $reader->bounds($name, $definition);
         $this->store()->execute('INSERT INTO whmcstofossbilling_analysis (source_id,table_name,expected,maximum,schema_checksum,analyzed_at) VALUES (?,?,?,?,?,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE expected=VALUES(expected),maximum=VALUES(maximum),schema_checksum=VALUES(schema_checksum),analyzed_at=UTC_TIMESTAMP()', [$source, $name, $bounds['count'], $bounds['maximum'], hash('sha256', $row['schema_json'])]);
 
         return ['table' => $name, ...$bounds];
+    }
+
+    public function prepareAnalysis(array $input): array
+    {
+        $source = $this->store()->source((int) ($input['source_id'] ?? 0));
+        $schema = json_decode($source['schema_json'], true, 128, JSON_THROW_ON_ERROR);
+        $target = (string) ($input['target_mode'] ?? 'archive');
+        if (!in_array($target, ['archive', 'reference_native', 'historical_native'], true)) throw new SafeException('Unknown analysis target mode.');
+        $selection = $input['tables'] ?? [];
+        if (!is_array($selection) || count($selection) > 500) throw new SafeException('Invalid source selection.');
+        foreach ($selection as $name) {
+            if (!is_string($name) || !isset($schema[$name])) throw new SafeException('Unknown source selection.');
+        }
+        if ($target !== 'archive') $selection = Dependencies::expand($schema, $selection);
+        $selection = array_values(array_unique($selection));
+
+        return ['tables' => $selection, 'issues' => Planner::analysisIssues($this->store(), (int) $source['id'], $schema, $selection)];
     }
 
     public function createRun(array $input, int $admin): array

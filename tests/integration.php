@@ -182,6 +182,32 @@ try {
         }
     }
     $runInput = ['source_id' => $profile['source_id'], 'tables' => $selection];
+    $analysisStore = $service->store();
+    $analysisStore->execute('DELETE FROM whmcstofossbilling_analysis WHERE source_id=? AND table_name=?', [$profile['source_id'], 'tblcurrencies']);
+    $analysisStore->execute('UPDATE whmcstofossbilling_analysis SET analyzed_at=UTC_TIMESTAMP() - INTERVAL 2 HOUR WHERE source_id=? AND table_name=?', [$profile['source_id'], 'tblclients']);
+    $prepared = $service->prepareAnalysis(['source_id' => $profile['source_id'], 'tables' => ['tblclients'], 'target_mode' => 'reference_native']);
+    expect(in_array('tblcurrencies', $prepared['tables'], true) && ($prepared['issues']['tblcurrencies'] ?? '') === 'missing' && ($prepared['issues']['tblclients'] ?? '') === 'stale', 'Analysis preparation expands native dependencies and names missing/stale counts');
+    try {
+        $service->createRun(['source_id' => $profile['source_id'], 'tables' => ['tblclients'], 'mode' => 'dry_run'], 1);
+        expect(false, 'Direct API callers cannot bypass count validation');
+    } catch (SafeException $error) {
+        expect(str_contains($error->getMessage(), 'tblclients (stale)') && str_contains($error->getMessage(), 'tblcurrencies (missing)'), 'Hard planner gate names every missing/stale table');
+    }
+    foreach (array_keys($prepared['issues']) as $name) $service->analyze($profile['source_id'], $name);
+    expect($service->prepareAnalysis(['source_id' => $profile['source_id'], 'tables' => ['tblclients'], 'target_mode' => 'reference_native'])['issues'] === [], 'Read-only refresh resolves the expanded selection');
+    $analysisStore->execute('UPDATE whmcstofossbilling_analysis SET schema_checksum=? WHERE source_id=? AND table_name=?', [str_repeat('0', 64), $profile['source_id'], 'tblclients']);
+    expect($service->prepareAnalysis(['source_id' => $profile['source_id'], 'tables' => ['tblclients'], 'target_mode' => 'archive'])['issues'] === ['tblclients' => 'schema changed'], 'Schema-mismatched analysis identifies the affected table');
+    $service->analyze($profile['source_id'], 'tblclients');
+    $admin->exec("ALTER TABLE `$sourceDb`.`tblclients` ADD COLUMN wm_schema_change_fixture INT NULL");
+    try {
+        $service->analyze($profile['source_id'], 'tblclients');
+        expect(false, 'A changed live schema must block count refresh');
+    } catch (SafeException $error) {
+        expect(str_contains($error->getMessage(), 'tblclients') && str_contains($error->getMessage(), 'Test the connection again'), 'Schema-change failure names the table and recovery action');
+    } finally {
+        $admin->exec("ALTER TABLE `$sourceDb`.`tblclients` DROP COLUMN wm_schema_change_fixture");
+    }
+    expect($sourceDigest() === $before, 'Preparation and count refresh leave synthetic WHMCS records unchanged');
     $service->testConnection(array_replace($options, ['source_timezone' => '']));
     try {
         $service->createRun($runInput + ['mode' => 'reference_native', 'confirmation' => 'PRESERVE HISTORY', 'backup_verified' => true, 'backup_reference' => 'disposable timezone fixture', 'accept_limitations' => true], 1);
