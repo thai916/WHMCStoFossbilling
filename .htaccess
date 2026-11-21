@@ -1,0 +1,7 @@
+# Wizard assets are delivered through the authenticated admin controller.
+# Protect development artifacts and source files without changing FOSSBilling's root rules.
+Require all denied
+# The extensions list loads this non-sensitive branding image directly.
+<Files "icon.png">
+    Require all granted
+</Files>

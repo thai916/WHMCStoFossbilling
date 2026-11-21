@@ -1,0 +1,5 @@
+/.local/
+/.phpunit.cache/
+/dist/
+*.log
+*.zip

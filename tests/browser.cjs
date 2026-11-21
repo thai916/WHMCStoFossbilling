@@ -1,0 +1,197 @@
+/* UI harness uses synthetic API responses; it does NOT test a live authenticated admin session. */
+const path = require("node:path");
+const fs = require("node:fs");
+const http = require("node:http");
+const { spawnSync } = require("node:child_process");
+const assert = require("node:assert/strict");
+const moduleDir = path.resolve(__dirname, "..");
+const rootDir = path.resolve(moduleDir, "../..");
+const artifacts = path.join(moduleDir, ".local", "browser-artifacts");
+fs.mkdirSync(artifacts, { recursive: true });
+process.env.TEMP = artifacts;
+process.env.TMP = artifacts;
+const { chromium } = require(process.env.WM_PLAYWRIGHT_PATH || path.join(moduleDir, ".local/browser/node_modules/playwright"));
+const php = process.env.WM_PHP || "php";
+const rendered = spawnSync(php, [path.join(__dirname, "render.php"), "--stdout"], { encoding: "utf8" });
+assert.equal(rendered.status, 0, "Twig render succeeds");
+const content = {
+    "/": [rendered.stdout, "text/html"],
+    "/wizard.js": [fs.readFileSync(path.join(moduleDir, "assets/wizard.js")), "application/javascript"],
+    "/wizard.css": [fs.readFileSync(path.join(moduleDir, "assets/wizard.css")), "text/css"],
+    "/icon.png": [fs.readFileSync(path.join(moduleDir, "icon.png")), "image/png"],
+    "/vendor.css": [fs.readFileSync(path.join(rootDir, "themes/admin_default/assets/build/css/vendor.css")), "text/css"],
+    "/fossbilling.css": [fs.readFileSync(path.join(rootDir, "themes/admin_default/assets/build/css/fossbilling.css")), "text/css"],
+};
+const schema = {
+    tblclients: { suffix: "clients", key: "id", classification: "archive", columns: { id: { type: "int", sensitive: false }, email: { type: "varchar(255)", sensitive: false }, password: { type: "varchar(255)", sensitive: true } } },
+    tblconfiguration: { suffix: "configuration", key: "id", classification: "excluded_sensitive", columns: { value: { type: "text", sensitive: false } } }
+};
+const profile = { version: 1, fields: { tblclients: { id: { action: "archive", target: null, transform: "identity", reason: "" }, email: { action: "native_and_archive", target: "email", transform: "identity", reason: "" }, password: { action: "exclude_sensitive", target: null, transform: "identity", reason: "" } }, tblconfiguration: { value: { action: "exclude_sensitive", target: null, transform: "identity", reason: "" } } } };
+const source = {
+    source_id: 1, label: "synthetic-fixture", version: "8.10.1", schema, profile, native_client_targets: ["email", "first_name"],
+    analysis: [], blockers: ["Native operational imports are blocked."],
+    fields: Object.entries(schema).flatMap(([table, def]) => Object.entries(def.columns).map(([field, col]) => ({ category: "Synthetic fixture", table, field, type: col.type, required: field === "id", classification: def.classification, ...profile.fields[table][field] })))
+};
+let currentRun = null;
+let schemaUpgradeRequired = true;
+let ipLookups = 0;
+const historicalRunId = "b".repeat(32);
+const historicalRun = {
+    id: historicalRunId, mode: "historical_native", status: "requires_action", last_batch_at: "2026-01-01 00:00:00",
+    categories: [{ table_name: "tblclients", expected: 3, processed: 3, imported: 3, archived: 0, skipped: 0, failed: 0 }],
+    errors: [],
+    reconciliation: {
+        status: "assessed", reason: "Extracted subset only; not live cutover reconciliation.",
+        totals_by_currency: {
+            closing_credit: [{ currency: "USD", source_total: "30.00", native_total: "25.00", source_records: 3, native_records: 2 }],
+            invoice_value: [{ currency: "EUR", source_total: "22.00", native_total: null, source_records: 1, native_records: 0 }]
+        }
+    },
+    credit_publication: [{ source_key: "3", status: "failed", message: "Closing balance mismatch <script>window.XSS_EXECUTED=true</script>" }]
+};
+const requests = [];
+const server = http.createServer((request, response) => {
+    const item = content[request.url];
+    if (!item) { response.writeHead(404); response.end(); return; }
+    response.writeHead(200, { "Content-Type": item[1] }); response.end(item[0]);
+});
+(async () => {
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+    const browser = await chromium.launchPersistentContext(path.join(artifacts, "profile"), {
+        headless: true, executablePath: process.env.WM_CHROME || "C:/Program Files/Google/Chrome/Application/chrome.exe",
+        args: ["--disable-breakpad", "--disable-crash-reporter", "--disable-background-networking", `--crash-dumps-dir=${artifacts}`],
+        viewport: { width: 1365, height: 1000 },
+    });
+    try {
+        const page = await browser.newPage(), errors = [];
+        page.on("pageerror", error => errors.push(error.message));
+        await page.route("**/api/admin/whmcsmigrator/**", async route => {
+            const request = route.request(), method = request.url().split("/").pop(), data = request.postDataJSON();
+            requests.push(method);
+            assert.equal(request.method(), "POST");
+            assert.equal(request.headers()["x-csrf-token"], "test-session-csrf");
+            let result;
+            switch (method) {
+                case "dashboard": result = { schema_upgrade_required: schemaUpgradeRequired, environment: { blockers: source.blockers }, sources: [{ id: 1, label: source.label, tested_at: "2026-01-01" }], runs: [{ id: historicalRunId, created_at: "2026-01-01", mode: "historical_native", status: "requires_action", label: "synthetic history" }] }; break;
+                case "schema_upgrade":
+                    assert.equal(data.confirmation, "UPGRADE EXTENSION TABLES");
+                    schemaUpgradeRequired = false; result = { upgraded: true }; break;
+                case "test_connection":
+                    assert.equal(data.password, "synthetic-only");
+                    assert.equal(data.tls, "1");
+                    assert.ok(data.tls_ca.length > 0, "CA default is submitted without manually creating a path");
+                    assert.equal(data.source_timezone, "UTC");
+                    assert.equal(data.source_timezone_verified, true);
+                    assert.equal(data.confirm_whmcs8, "", "Auto-detect is the default version policy");
+                    result = source; break;
+                case "public_ip":
+                    assert.deepEqual(data, { confirmation: "LOOK UP PUBLIC IP" }, "IP lookup sends no database credentials");
+                    if (++ipLookups === 2) {
+                        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ result: null, error: { message: "Synthetic lookup unavailable" } }) });
+                        return;
+                    }
+                    result = { ip: "8.8.8.8", provider: "https://api.ipify.org", checked_at: "2026-01-01 00:00:00" }; break;
+                case "mapping_get": result = source; break;
+                case "mapping_save": result = { profile: data.profile, validated: true }; break;
+                case "analyze_table": result = { table: data.table, count: 1, maximum: "1" }; break;
+                case "run_create":
+                    assert.equal(data.mode, "dry_run", "Browser suite never authorizes a real import");
+                    assert.equal(data.target_mode, "historical_native", "Preview keeps the explicitly selected target mode");
+                    currentRun = { id: "a".repeat(32), mode: data.mode, status: "paused", last_batch_at: null, categories: [{ table_name: "tblclients", expected: 1, processed: 0, imported: 0, archived: 0, skipped: 0, failed: 0 }], errors: [], reconciliation: { reason: "Not performed" } };
+                    result = currentRun; break;
+                case "run_control": currentRun.status = data.action === "resume" ? "running" : "paused"; result = currentRun; break;
+                case "run_batch": currentRun.status = "preview_finished"; currentRun.categories[0].processed = 1; currentRun.categories[0].archived = 1; result = { status: currentRun.status }; break;
+                case "run_status": result = data.run_id === historicalRunId ? historicalRun : currentRun; break;
+                case "archive_search":
+                    assert.equal(data.legacy_kind, "invoice");
+                    assert.equal(data.legacy_reference, "LEGACY-001");
+                    result = { records: [{ table_name: "tblnotes", source_key: "1", payload: { note: "<script>window.XSS_EXECUTED=true</script>" } }], next_offset: null }; break;
+                default: throw new Error("Unexpected UI request " + method);
+            }
+            await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ result, error: null }) });
+        });
+        await page.addInitScript(() => {
+            // Test clipboard wiring without changing the user's real clipboard.
+            Object.defineProperty(navigator, "clipboard", { value: { writeText: async text => { window.TEST_COPIED_IP = text; } } });
+        });
+        await page.goto(`http://127.0.0.1:${port}/`);
+        await page.waitForLoadState("networkidle");
+        assert.equal(await page.locator("#wm-next").isDisabled(), true);
+        assert.equal(requests.includes("test_connection"), false, "No connection runs on page load");
+        assert.equal(requests.includes("public_ip"), false, "No external IP lookup runs on page load");
+        assert.equal(await page.locator("#wm-timezone").inputValue(), "UTC");
+        assert.equal(await page.locator("#wm-timezone-verified").isChecked(), false, "Default timezone is not silently verified");
+        assert.equal(await page.locator("#wm-version").inputValue(), "");
+        assert.ok((await page.locator("#wm-ca").inputValue()).length > 0);
+        assert.equal(await page.locator(".wm-logo").evaluate(img => img.complete && img.naturalWidth > 0), true, "Supplied PNG loads");
+        assert.equal(await page.locator("#wm-schema-warning").isVisible(), true);
+        page.once("dialog", dialog => dialog.dismiss());
+        await page.locator("#wm-schema-upgrade").click();
+        assert.equal(requests.includes("schema_upgrade"), false, "Declined schema confirmation makes no API call");
+        page.once("dialog", dialog => dialog.accept());
+        await page.locator("#wm-schema-upgrade").click();
+        await page.waitForFunction(() => document.getElementById("wm-schema-warning").classList.contains("d-none"));
+        assert.equal(requests.filter(method => method === "schema_upgrade").length, 1);
+        assert.equal(requests.includes("test_connection"), false, "Schema upgrade never connects to a source");
+        await page.locator("#wm-ip-lookup").click();
+        await page.waitForFunction(() => !document.getElementById("wm-ip-copy").disabled);
+        assert.equal(await page.locator("#wm-public-ip").innerText(), "8.8.8.8");
+        await page.locator("#wm-ip-copy").click();
+        await page.waitForFunction(() => window.TEST_COPIED_IP === "8.8.8.8");
+        await page.locator("#wm-ip-lookup").click();
+        await page.getByText("Unavailable", { exact: true }).waitFor();
+        assert.equal(await page.locator("#wm-ip-copy").isDisabled(), true, "Failed refresh never leaves an outdated IP copyable");
+        await page.locator("#wm-host").fill("127.0.0.1");
+        await page.locator("#wm-database").fill("synthetic");
+        await page.locator("#wm-username").fill("reader");
+        await page.locator("#wm-password").fill("synthetic-only");
+        await page.locator("#wm-timezone-verified").check();
+        await page.getByRole("button", { name: "Test connection", exact: true }).click();
+        await page.waitForFunction(() => !document.getElementById("wm-next").disabled);
+        assert.equal(await page.locator("#wm-password").inputValue(), "");
+        await page.locator("#wm-next").click();
+        await page.locator("#wm-field-search").fill("password");
+        assert.match(await page.locator("#wm-fields").innerText(), /Excluded sensitive field/);
+        await page.locator("#wm-field-search").fill("");
+        await page.locator("#wm-review").click();
+        await page.locator("#wm-analyze").click();
+        await page.getByText("Selected table counts captured.", { exact: false }).waitFor();
+        assert.equal(await page.locator('#wm-tables input[value="tblconfiguration"]').isDisabled(), true);
+        await page.locator("#wm-mode").selectOption("historical_native");
+        await page.locator("#wm-dry-run").click();
+        assert.equal(requests.includes("run_batch"), false, "Preview creation cannot start scheduling before explicit Resume");
+        await page.locator("#wm-resume").click();
+        await page.waitForFunction(() => document.getElementById("wm-run-summary").textContent.includes("preview_finished"));
+        await page.locator('[data-step="archive"]').click();
+        await page.locator('[name="legacy_reference"]').fill("LEGACY-001");
+        await page.locator("#wm-archive-search button").click();
+        await page.locator("#wm-archive-results details").waitFor();
+        assert.equal(await page.evaluate(() => window.XSS_EXECUTED), undefined, "Archive HTML never executes");
+        assert.equal(await page.evaluate(() => localStorage.length), 0, "No browser storage used");
+        assert.equal(await page.evaluate(() => sessionStorage.length), 0, "No session storage used");
+        await page.locator('[data-step="progress"]').click();
+        await page.locator("#wm-runs").selectOption(historicalRunId);
+        await page.waitForFunction(() => document.getElementById("wm-run-summary").textContent.includes("requires_action"));
+        const financialRows = await page.locator("#wm-financial tbody tr").allTextContents();
+        assert.ok(financialRows.some(row => row.includes("USD") && row.includes("30.00") && row.includes("25.00")), "Source/native credit discrepancy remains visible");
+        assert.ok(financialRows.some(row => row.includes("EUR") && row.includes("Not represented")), "Missing native value is not rendered as zero");
+        assert.match(await page.locator("#wm-credit-results").innerText(), /Closing balance mismatch/);
+        assert.equal(await page.evaluate(() => window.XSS_EXECUTED), undefined, "Financial diagnostics never execute HTML");
+        await page.locator('[data-step="connection"]').click();
+        await page.screenshot({ path: path.join(artifacts, "desktop.png"), fullPage: true });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.screenshot({ path: path.join(artifacts, "mobile.png"), fullPage: true });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile connection page has no horizontal overflow");
+        assert.deepEqual(errors, [], "No browser JavaScript errors");
+        console.log("PASS: synthetic browser wizard, supplied icon, default CA, timezone/version dropdowns, explicit public-IP lookup/copy/failure, confirmed schema upgrade, historical-target preview, explicit resume, legacy-reference search, financial discrepancies/missing values, diagnostic/archive XSS protection, no browser storage, desktop/mobile layout");
+        const livePage = await browser.newPage();
+        await livePage.goto("http://fossbill.test/admin/whmcsmigrator");
+        await livePage.waitForLoadState("networkidle");
+        assert.match(await livePage.title(), /Login/i);
+        console.log("PASS: unauthenticated real local admin page requires login");
+    } finally {
+        await browser.close();
+        server.close();
+    }
+})().catch(error => { console.error(error.message); server.close(); process.exitCode = 1; });

@@ -1,0 +1,14 @@
+{
+  "id": "whmcsmigrator",
+  "type": "mod",
+  "name": "FOSSB to WHMCS Migrator",
+  "icon_url": "icon.png",
+  "description": "A vibe coded WHMCS migration extension focused on read-only source access, historical preservation, resumable processing and financial reconciliation.",
+  "author": "Monlam Makhampa",
+  "author_url": "https://github.com/thai916",
+  "homepage_url": "https://github.com/thai916/Whmcsmigrator",
+  "license": "Apache-2.0",
+  "version": "0.1",
+  "minimum_fossbilling_version": "0.8.9",
+  "maximum_fossbilling_version": "0.8.9"
+}

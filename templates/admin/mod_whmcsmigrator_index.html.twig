@@ -1,0 +1,123 @@
+{% extends "layout_default.html.twig" %}
+{% set active_menu = 'extensions' %}
+{% block meta_title %}FOSSB to WHMCS Migrator{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ migrator_css }}">
+<script src="{{ migrator_js }}" defer></script>
+{% endblock %}
+{% block content %}
+<div id="whmcsmigrator" data-api="{{ migrator_api }}" data-csrf="{{ migrator_csrf }}">
+    <div class="wm-heading">
+        <div class="wm-brand"><img src="{{ migrator_icon }}" class="wm-logo" width="56" height="56" alt=""><div><div class="text-muted small">WHMCS 8.x → FOSSBilling 0.8.9</div><h2>FOSSB to WHMCS Migrator <span class="badge bg-orange-lt">0.1 · experimental</span></h2><p>Read-only at the source. Traceable at the destination.</p></div></div>
+        <div class="wm-seal"><strong>SELECT ONLY</strong><span>Production source protection</span></div>
+    </div>
+    <div class="alert alert-warning">
+        <strong>This is not a complete billing migration.</strong> Native products, base-currency pricing, add-ons, inactive servers, closed tickets and email history are supported. Historical mode also supports eligible inactive hosting, exactly representable non-unpaid invoices, processed payments and verified credit aggregates. Active/suspended/pending hosting, all domain orders, unpaid invoices and unsupported tax/currency cases remain blocked.
+        <details class="mt-2"><summary>Why some categories are blocked</summary><ul id="wm-blockers" class="mt-2"></ul></details>
+    </div>
+    <div id="wm-notice" class="alert d-none" role="status" aria-live="polite"></div>
+    <div id="wm-schema-warning" class="alert alert-warning d-none">This preview needs additional extension-owned tracking tables. No schema change runs automatically. <button class="btn btn-warning" id="wm-schema-upgrade" type="button">Upgrade extension tables only</button></div>
+    <nav class="wm-steps mb-3" aria-label="Migration steps">
+        <button type="button" class="btn btn-primary" data-step="connection">1 · Connect</button>
+        <button type="button" class="btn btn-outline-secondary" data-step="mapping" disabled>2 · Map fields</button>
+        <button type="button" class="btn btn-outline-secondary" data-step="analysis" disabled>3 · Review & preview</button>
+        <button type="button" class="btn btn-outline-secondary" data-step="progress">4 · Runs & reports</button>
+        <button type="button" class="btn btn-outline-secondary" data-step="archive">Legacy archive</button>
+    </nav>
+    <section data-panel="connection" class="card">
+        <div class="card-header"><h3 class="card-title">WHMCS database connection</h3></div>
+        <div class="card-body">
+            <div class="alert alert-info">
+                <strong>Important: Remote Database Access</strong>
+                <p class="mb-1">Before connecting to your live WHMCS database, add the current public IP address of the FOSSBilling server to the Remote MySQL/Remote Database Access allowlist on the WHMCS hosting server.</p>
+                <p class="mb-1">Use a dedicated database account with SELECT-only permissions. The migration tool will read data from WHMCS but will never modify the WHMCS database.</p>
+                <p class="mb-2">Look up this FOSSBilling server’s public outbound IPv4 address, not the browser’s LAN address. This sends an HTTPS request to api.ipify.org, which will see the server’s public IP. No database credentials or customer data are sent.</p>
+                <div class="d-flex gap-2 align-items-center flex-wrap"><button type="button" id="wm-ip-lookup" class="btn btn-outline-primary">Show public IP</button><output id="wm-public-ip" class="wm-ip-address" aria-live="polite">Not checked</output><button type="button" id="wm-ip-copy" class="btn btn-outline-secondary" disabled>Copy IP</button></div>
+                <p id="wm-ip-status" class="small mt-2 mb-0">No automatic lookup. VPNs, proxies and routing can change the IP your MySQL server sees; verify it with your hosting provider.</p>
+            </div>
+            <form id="wm-connection">
+                <div class="row g-3">
+                    <div class="col-md-8"><label class="form-label" for="wm-host">Database hostname / IP</label><input id="wm-host" class="form-control" name="host" required maxlength="253" autocomplete="off" placeholder="db.example.com"></div>
+                    <div class="col-md-4"><label class="form-label" for="wm-port">Port</label><input id="wm-port" class="form-control" name="port" type="number" min="1" max="65535" value="3306" required></div>
+                    <div class="col-md-6"><label class="form-label" for="wm-database">Database name</label><input id="wm-database" class="form-control" name="database" required autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label" for="wm-username">SELECT-only username</label><input id="wm-username" class="form-control" name="username" required autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label" for="wm-password">Database password</label><input id="wm-password" class="form-control" name="password" type="password" autocomplete="new-password"></div>
+                    <div class="col-md-3"><label class="form-label" for="wm-prefix">Table prefix</label><input id="wm-prefix" class="form-control" name="prefix" value="tbl" required></div>
+                    <div class="col-md-3"><label class="form-label" for="wm-timeout">Connect timeout (seconds)</label><input id="wm-timeout" class="form-control" name="timeout" type="number" min="1" max="10" value="5"></div>
+                    <div class="col-md-4"><label class="form-check mt-3"><input class="form-check-input" name="tls" type="checkbox" value="1" checked><span class="form-check-label">Verified TLS (required for remote hosts)</span></label></div>
+                    <div class="col-md-8"><label class="form-label" for="wm-ca">CA certificate path on the FOSSBilling server</label><input id="wm-ca" class="form-control" name="tls_ca" value="{{ migrator_ca }}" autocomplete="off" aria-describedby="wm-ca-help"><small id="wm-ca-help">A readable default is selected automatically. Clear this field to reuse the default. For private/self-signed database certificates, enter your hosting provider’s CA file path. Certificate and hostname verification stay enabled.</small></div>
+                    <div class="col-md-6"><label class="form-label" for="wm-version">WHMCS version</label><select id="wm-version" class="form-select" name="confirm_whmcs8" aria-describedby="wm-version-help"><option value="" selected>Auto-detect (recommended)</option><option value="WHMCS 8.x">WHMCS 8.x — I verified this manually</option></select><small id="wm-version-help">Only WHMCS 8.x is supported. The manual selection is used only when detection is unavailable; it never overrides an incompatible detected version.</small></div>
+                    <div class="col-md-6"><label class="form-label" for="wm-timezone">WHMCS source timezone</label><select id="wm-timezone" class="form-select" name="source_timezone" aria-describedby="wm-timezone-help"><option value="">Unknown — archive only for event timestamps</option>{% for timezone in migrator_timezones %}<option value="{{ timezone }}"{% if timezone == 'UTC' %} selected{% endif %}>{{ timezone }}</option>{% endfor %}</select><small id="wm-timezone-help">UTC is a suggested default, not a detected setting. Choose the actual WHMCS timezone; calendar dates remain unchanged.</small><label class="form-check mt-2"><input id="wm-timezone-verified" class="form-check-input" type="checkbox" name="source_timezone_verified" value="1"><span class="form-check-label">I verified this timezone in WHMCS. Without confirmation, native event-timestamp imports remain blocked.</span></label></div>
+                </div>
+                <div class="mt-3 d-flex gap-2 flex-wrap"><button class="btn btn-primary" type="submit">Test connection</button><button class="btn btn-outline-primary" id="wm-next" type="button" disabled>Next: Review field mapping</button></div>
+            </form>
+            <div id="wm-source-status" class="mt-3"></div>
+            <div class="mt-3"><label class="form-label" for="wm-sources">Previously tested sources</label><select class="form-select" id="wm-sources"><option value="">Select a source…</option></select></div>
+        </div>
+    </section>
+    <section data-panel="mapping" class="card d-none">
+        <div class="card-header"><h3 class="card-title">Field compatibility & preservation</h3></div>
+        <div class="card-body">
+            <p>Every column has a disposition. Sensitive fields cannot be extracted. Only reviewed client text fields support editable native targets; relationship, date and monetary adapters are fixed, or archive-only. No confidential sample values are fetched.</p>
+            <div class="d-flex gap-2 flex-wrap mb-3">
+                <input class="form-control wm-search" id="wm-field-search" placeholder="Search table, field or target" aria-label="Search fields">
+                <select class="form-select wm-search" id="wm-field-filter" aria-label="Filter mappings"><option value="">All mappings</option><option value="archive">Archive only</option><option value="native_and_archive">Native & archive</option><option value="exclude_sensitive">Excluded secrets</option><option value="skip">Intentional skips</option></select>
+                <button class="btn btn-outline-secondary" id="wm-defaults" type="button">Restore recommended defaults</button>
+                <button class="btn btn-outline-secondary" id="wm-profile-export" type="button">Export profile</button>
+                <label class="btn btn-outline-secondary mb-0">Import profile<input id="wm-profile-import" type="file" accept=".json,application/json" hidden></label>
+                <button class="btn btn-primary" id="wm-mapping-save" type="button">Validate & save mappings</button>
+            </div>
+            <div id="wm-fields"></div>
+            <button class="btn btn-primary mt-3" id="wm-review" type="button">Next: Pre-migration analysis</button>
+        </div>
+    </section>
+    <section data-panel="analysis" class="card d-none">
+        <div class="card-header"><h3 class="card-title">Select, analyze, then preview</h3></div>
+        <div class="card-body">
+            <p>Counts are read one table per request. Native modes include required dependencies; analyze newly required tables if prompted. Unsupported records remain archived or failed, never silently counted as native. Historical financial mode requires a verified source timezone and an otherwise idle, private destination.</p>
+            <div id="wm-tables"></div>
+            <div class="d-flex gap-2 mt-3"><button class="btn btn-outline-primary" id="wm-analyze" type="button">Analyze selected tables</button><button class="btn btn-primary" id="wm-dry-run" type="button">Create dry run</button></div>
+            <hr>
+            <form id="wm-authorize">
+                <label class="form-label" for="wm-mode">Execution mode</label><select class="form-select" name="mode" id="wm-mode"><option value="archive">Archive reviewed tables only</option><option value="reference_native">Archive + supported native clients/catalog/closed history</option><option value="historical_native">Also publish eligible inactive hosting and historical finance</option></select>
+                <label class="form-label mt-3" for="wm-backup">Verified destination backup reference (no secrets)</label><input class="form-control" name="backup_reference" id="wm-backup" maxlength="255" required>
+                <label class="form-check mt-3"><input class="form-check-input" name="backup_verified" type="checkbox" value="1" required><span class="form-check-label">I verified that my destination database backup can be restored.</span></label>
+                <label class="form-check mt-2"><input class="form-check-input" name="accept_limitations" type="checkbox" value="1" required><span class="form-check-label">I understand 0.1 is incomplete. Hosting/domain orders and unsafe financial records remain blocked. Independent currency prices and gateway fees may be archive-only. Archives contain private data and recognized secrets are redacted.</span></label>
+                <label class="form-check mt-2"><input class="form-check-input" name="destination_exclusive" type="checkbox" value="1"><span class="form-check-label">For historical financial mode: the destination is private and no other administrator, customer or integration will create/change business records during this run. No global automation setting will be changed by this extension.</span></label>
+                <label class="form-label mt-3" for="wm-confirm">Type PRESERVE HISTORY to authorize destination writes</label><input id="wm-confirm" class="form-control" name="confirmation" required autocomplete="off">
+                <button class="btn btn-warning mt-3" type="submit">Create authorized run (starts paused)</button>
+            </form>
+        </div>
+    </section>
+    <section data-panel="progress" class="card d-none">
+        <div class="card-header"><h3 class="card-title">Migration runs</h3></div>
+        <div class="card-body">
+            <label class="form-label" for="wm-runs">Select a run</label><select class="form-select" id="wm-runs"><option value="">Select a run…</option></select>
+            <div id="wm-run-summary" class="mt-3"></div>
+            <progress class="wm-progress" id="wm-progress" max="100" value="0" aria-label="Records scanned"></progress>
+            <div class="d-flex gap-2 flex-wrap my-3">
+                <button class="btn btn-primary" id="wm-resume" type="button">Resume processing</button>
+                <button class="btn btn-outline-secondary" id="wm-pause" type="button">Pause</button>
+                <button class="btn btn-outline-danger" id="wm-cancel" type="button">Cancel future batches</button>
+                <button class="btn btn-outline-secondary" id="wm-refresh" type="button">Refresh status</button>
+                <button class="btn btn-outline-warning" id="wm-retry" type="button">Retry up to 5 failed records</button>
+                <button class="btn btn-outline-secondary" id="wm-report-json" type="button">Export JSON report</button>
+                <button class="btn btn-outline-secondary" id="wm-report-csv" type="button">Export CSV report</button>
+            </div>
+            <p class="text-muted">Closing this tab stops future requests, not committed work. Reopen, select the run and resume. A cancelled run keeps imported records. There is no destructive automatic rollback.</p>
+            <div id="wm-counts"></div><h4 class="mt-3">Exceptions (first 100)</h4><div id="wm-errors"></div>
+            <h4 class="mt-3">Financial snapshot assessment</h4><div id="wm-financial"></div>
+            <h4 class="mt-3">Client credit publication</h4><div id="wm-credit-results"></div>
+        </div>
+    </section>
+    <section data-panel="archive" class="card d-none">
+        <div class="card-header"><h3 class="card-title">Private legacy archive</h3></div>
+        <div class="card-body">
+            <p>Administrator-only historical evidence. Internal notes stay private; imported HTML is displayed as text. Files referenced by attachment fields have not been transferred.</p>
+            <form id="wm-archive-search" class="d-flex gap-2 flex-wrap"><input class="form-control wm-search" name="table_name" placeholder="Exact source table (optional)" aria-label="Source table"><input class="form-control wm-search" name="source_key" placeholder="WHMCS record ID (optional)" aria-label="WHMCS ID"><select class="form-select wm-search" name="legacy_kind" aria-label="Legacy reference kind"><option value="invoice">Invoice number</option><option value="ticket">Ticket reference</option></select><input class="form-control wm-search" name="legacy_reference" placeholder="Exact legacy number/reference (optional)" aria-label="Legacy reference"><button class="btn btn-primary" type="submit">Search selected source</button></form>
+            <div id="wm-archive-results" class="mt-3"></div>
+        </div>
+    </section>
+    <p class="text-muted small mt-3">Author: Monlam Makhampa · This extension is vibe coded. Independent review and disposable-database testing are required before production use.</p>
+</div>
+{% endblock %}

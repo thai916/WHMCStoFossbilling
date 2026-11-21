@@ -1,0 +1,324 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Box\Mod\Whmcsmigrator;
+
+use Box\Mod\Whmcsmigrator\Destination\NativeWriter;
+use Box\Mod\Whmcsmigrator\Destination\Store;
+use Box\Mod\Whmcsmigrator\Installation\Schema;
+use Box\Mod\Whmcsmigrator\Mapping\Profile;
+use Box\Mod\Whmcsmigrator\Migration\Engine;
+use Box\Mod\Whmcsmigrator\Migration\Dependencies;
+use Box\Mod\Whmcsmigrator\Finance\Reconciler;
+use Box\Mod\Whmcsmigrator\Migration\Planner;
+use Box\Mod\Whmcsmigrator\Security\SafeException;
+use Box\Mod\Whmcsmigrator\Security\Vault;
+use Box\Mod\Whmcsmigrator\Source\ConnectionOptions;
+use Box\Mod\Whmcsmigrator\Source\Reader;
+use FOSSBilling\Config;
+
+final class Service implements \FOSSBilling\InjectionAwareInterface
+{
+    protected ?\Pimple\Container $di = null;
+
+    public function setDi(\Pimple\Container $di): void
+    {
+        $this->di = $di;
+    }
+
+    public function getDi(): ?\Pimple\Container
+    {
+        return $this->di;
+    }
+
+    public function getModulePermissions(): array
+    {
+        $result = [];
+        foreach (['view' => 'View migration dashboard', 'configure' => 'Manage source credentials and mappings', 'execute' => 'Authorize and operate migration runs', 'archive' => 'Inspect private legacy records', 'export' => 'Export migration reports'] as $key => $name) {
+            $result[$key] = ['type' => 'bool', 'display_name' => $name, 'description' => $name . '. Customer information is confidential.'];
+        }
+
+        return $result;
+    }
+
+    public function install(): bool
+    {
+        $this->requirements();
+        Schema::install($this->store()->pdo);
+
+        return true;
+    }
+
+    public function update(array $manifest = []): bool
+    {
+        return $this->install();
+    }
+
+    public function uninstall(): bool
+    {
+        // Deliberately retain all evidence and mappings. No cascade into imported business records.
+        return true;
+    }
+
+    public function store(): Store
+    {
+        $connection = $this->di['dbal']->getNativeConnection();
+        if (!$connection instanceof \PDO) {
+            throw new SafeException('A PDO-backed destination connection is required.');
+        }
+
+        return new Store($connection);
+    }
+
+    private function vault(): Vault
+    {
+        return new Vault((string) Config::getProperty('info.salt'));
+    }
+
+    public function requirements(): array
+    {
+        if (version_compare(PHP_VERSION, '8.3', '<') || \FOSSBilling\Version::VERSION !== '0.8.9') {
+            throw new SafeException('This adapter requires FOSSBilling 0.8.9 and PHP 8.3 or newer.');
+        }
+        foreach (['pdo_mysql', 'openssl', 'bcmath', 'mbstring', 'json'] as $extension) {
+            if (!extension_loaded($extension)) {
+                throw new SafeException('A required PHP extension is missing: ' . $extension . '.');
+            }
+        }
+
+        return ['php' => PHP_VERSION, 'fossbilling' => \FOSSBilling\Version::VERSION, 'blockers' => Planner::BLOCKERS];
+    }
+
+    public function sources(): array
+    {
+        return $this->store()->all('SELECT id,label,source_version,tested_at,created_at FROM whmcsmigrator_source ORDER BY id DESC');
+    }
+
+    public function testConnection(#[\SensitiveParameter] array $input): array
+    {
+        $this->requirements();
+        $options = ConnectionOptions::validate($input);
+        $reader = new Reader($options);
+        $schema = $reader->inspect();
+        $version = $reader->version($schema);
+        if ($version !== null && !str_starts_with($version, '8.')) {
+            throw new SafeException('The detected source is not WHMCS 8.x.');
+        }
+        if ($version === null && ($input['confirm_whmcs8'] ?? '') !== 'WHMCS 8.x') {
+            throw new SafeException('Source version could not be detected. Verify WHMCS 8.x manually and provide the explicit version confirmation.');
+        }
+        $store = $this->store();
+        $store->verifyDestination();
+        $fingerprint = hash('sha256', Store::json([$options['host'], $options['port'], $options['database'], $options['prefix']]));
+        $lock = 'whmcsmigrator-profile-' . substr($fingerprint, 0, 32);
+        $store->lock($lock);
+        try {
+            $previous = $store->one('SELECT * FROM whmcsmigrator_source WHERE fingerprint=?', [$fingerprint]);
+            $mapping = $previous
+                ? Store::json(Profile::rebase(json_decode($previous['mapping_json'], true, 128, JSON_THROW_ON_ERROR), $schema))
+                : Store::json(Profile::defaults($schema));
+            $label = $options['host'] . ':' . $options['port'] . '/' . $options['database'];
+            $store->execute('INSERT INTO whmcsmigrator_source (fingerprint,label,credentials,schema_json,mapping_json,source_version,tested_at,created_at) VALUES (?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE credentials=VALUES(credentials),schema_json=VALUES(schema_json),mapping_json=VALUES(mapping_json),source_version=VALUES(source_version),tested_at=UTC_TIMESTAMP()', [$fingerprint, $label, $this->vault()->seal($options), Store::json($schema), $mapping, $version]);
+            $id = (int) $store->one('SELECT id FROM whmcsmigrator_source WHERE fingerprint=?', [$fingerprint])['id'];
+
+            return $this->mapping($id);
+        } finally {
+            $store->unlock($lock);
+        }
+    }
+
+    public function mapping(int $source): array
+    {
+        $row = $this->store()->source($source);
+        $schema = json_decode($row['schema_json'], true, 128, JSON_THROW_ON_ERROR);
+        $profile = json_decode($row['mapping_json'], true, 128, JSON_THROW_ON_ERROR);
+
+        return [
+            'source_id' => $source, 'label' => $row['label'], 'version' => $row['source_version'],
+            'source_timezone' => $this->vault()->open($row['credentials'])['source_timezone'] ?? '',
+            'schema' => $schema, 'profile' => $profile, 'fields' => Profile::describe($schema, $profile),
+            'native_client_targets' => array_values(Profile::CLIENT_FIELDS),
+            'native_entities' => NativeWriter::ENTITIES,
+            'analysis' => $this->store()->all('SELECT table_name,expected,maximum,analyzed_at FROM whmcsmigrator_analysis WHERE source_id=?', [$source]),
+            'blockers' => Planner::BLOCKERS,
+        ];
+    }
+
+    public function saveMapping(int $source, array $profile): array
+    {
+        $row = $this->store()->source($source);
+        $schema = json_decode($row['schema_json'], true, 128, JSON_THROW_ON_ERROR);
+        $clean = Profile::validate($profile, $schema);
+        $this->store()->execute('UPDATE whmcsmigrator_source SET mapping_json=? WHERE id=?', [Store::json($clean), $source]);
+
+        return ['profile' => $clean, 'validated' => true];
+    }
+
+    public function analyze(int $source, string $name): array
+    {
+        $row = $this->store()->source($source);
+        $schema = json_decode($row['schema_json'], true, 128, JSON_THROW_ON_ERROR);
+        $definition = $schema[$name] ?? throw new SafeException('Unknown source table.');
+        $reader = new Reader($this->vault()->open($row['credentials']));
+        if (Store::json($reader->inspect()) !== $row['schema_json']) {
+            throw new SafeException('The source schema changed. Test the connection again.');
+        }
+        $bounds = $reader->bounds($name, $definition);
+        $this->store()->execute('INSERT INTO whmcsmigrator_analysis (source_id,table_name,expected,maximum,schema_checksum,analyzed_at) VALUES (?,?,?,?,?,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE expected=VALUES(expected),maximum=VALUES(maximum),schema_checksum=VALUES(schema_checksum),analyzed_at=UTC_TIMESTAMP()', [$source, $name, $bounds['count'], $bounds['maximum'], hash('sha256', $row['schema_json'])]);
+
+        return ['table' => $name, ...$bounds];
+    }
+
+    public function createRun(array $input, int $admin): array
+    {
+        $this->requirements();
+        $source = $this->store()->source((int) ($input['source_id'] ?? 0));
+        $schema = json_decode($source['schema_json'], true, 128, JSON_THROW_ON_ERROR);
+        $profile = Profile::validate(json_decode($source['mapping_json'], true, 128, JSON_THROW_ON_ERROR), $schema);
+        $mode = (string) ($input['mode'] ?? 'dry_run');
+        if (!in_array($mode, ['dry_run', 'archive', 'reference_native', 'historical_native'], true)) {
+            throw new SafeException('Unknown migration mode.');
+        }
+        if ($mode !== 'dry_run' && (($input['confirmation'] ?? '') !== 'PRESERVE HISTORY' || empty($input['backup_verified']) || empty($input['accept_limitations']) || trim((string) ($input['backup_reference'] ?? '')) === '')) {
+            throw new SafeException('Confirm a verified destination backup, acknowledge the limitations and type PRESERVE HISTORY.');
+        }
+        if ($mode === 'historical_native' && empty($input['destination_exclusive'])) throw new SafeException('Historical financial publication requires explicit confirmation of an otherwise idle, private destination. This tool does not disable global automation.');
+        $target = $mode === 'dry_run' ? (string) ($input['target_mode'] ?? 'reference_native') : $mode;
+        if (!in_array($target, ['archive', 'reference_native', 'historical_native'], true)) throw new SafeException('Unknown dry-run target mode.');
+        $selection = $input['tables'] ?? [];
+        if (!is_array($selection) || count($selection) > 500) {
+            throw new SafeException('Invalid source selection.');
+        }
+        if (in_array($target, ['reference_native', 'historical_native'], true)) {
+            $selection = Dependencies::expand($schema, $selection);
+        }
+        if ($mode === 'historical_native' && Config::getProperty('i18n.timezone', 'UTC') !== 'UTC') {
+            throw new SafeException('Historical financial adapters currently require a UTC-configured destination. No global timezone was changed; use archive mode pending a reviewed conversion adapter.');
+        }
+        if ($mode === 'reference_native' && Config::getProperty('i18n.timezone', 'UTC') !== 'UTC') {
+            foreach ($selection as $name) {
+                if (in_array($schema[$name]['suffix'], ['tickets', 'ticketreplies', 'ticketnotes', 'emails'], true)) throw new SafeException('Native history timestamp adapters currently require a UTC-configured destination. No global timezone was changed.');
+            }
+        }
+        $store = $this->store();
+        $plan = Planner::build($store, (int) $source['id'], $schema, array_values(array_unique($selection)));
+        $plan['destination_fingerprint'] = $store->verifyDestination()['fingerprint'];
+        $options = $this->vault()->open($source['credentials']);
+        $plan['source_timezone'] = $options['source_timezone'] ?? '';
+        $plan['source_prefix'] = $options['prefix'];
+        $plan['adapter_revision'] = 2;
+        $plan['target_mode'] = $target;
+        $plan['native_entities'] = $target === 'archive' ? [] : NativeWriter::ENTITIES;
+        if ($target !== 'historical_native') unset($plan['native_entities']['invoices'], $plan['native_entities']['accounts'], $plan['native_entities']['hosting']);
+        $plan['destination_timezone'] = Config::getProperty('i18n.timezone', 'UTC');
+        $id = bin2hex(random_bytes(16));
+        if ($store->pdo->inTransaction()) throw new SafeException('A destination transaction is already active. Migration plan creation cannot take ownership of another transaction.');
+        $lock = 'whmcsmigrator-source-' . $source['id'];
+        $store->lock($lock);
+        try {
+            if ($mode !== 'dry_run' && $store->one("SELECT id FROM whmcsmigrator_run WHERE source_id=? AND mode<>'dry_run' AND status IN ('running','paused') LIMIT 1", [$source['id']])) {
+                throw new SafeException('Another archival/native run for this source is unfinished. Finish or cancel it before creating another non-preview run.');
+            }
+            $store->pdo->beginTransaction();
+            $store->execute('INSERT INTO whmcsmigrator_run (id,source_id,status,mode,schema_json,mapping_json,plan_json,owner_id,backup_reference,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())', [$id, $source['id'], 'paused', $mode, Store::json($schema), Store::json($profile), Store::json($plan), $admin, mb_substr(trim((string) ($input['backup_reference'] ?? 'dry run')), 0, 255)]);
+            foreach ($plan['tables'] as $table => $bounds) {
+                $store->execute('INSERT INTO whmcsmigrator_cursor (run_id,table_name,expected,maximum) VALUES (?,?,?,?)', [$id, $table, $bounds['count'], $bounds['maximum']]);
+            }
+            $store->pdo->commit();
+        } catch (\Throwable $error) {
+            if ($store->pdo->inTransaction()) $store->pdo->rollBack();
+            throw $error;
+        } finally {
+            $store->unlock($lock);
+        }
+
+        return $this->status($id);
+    }
+
+    public function control(string $id, string $action): array
+    {
+        $store = $this->store();
+        $run = $store->run($id);
+        $lock = 'whmcsmigrator-source-' . $run['source_id'];
+        $store->lock($lock);
+        try {
+            $run = $store->run($id);
+            $status = match ($action) {
+                'pause' => $run['status'] === 'running' ? 'paused' : throw new SafeException('Only running migrations can be paused.'),
+                'resume' => in_array($run['status'], ['paused', 'running'], true) ? 'running' : throw new SafeException('This migration cannot be resumed.'),
+                'cancel' => in_array($run['status'], ['paused', 'running'], true) ? 'cancelled' : throw new SafeException('This migration is already stopped.'),
+                default => throw new SafeException('Unknown migration action.'),
+            };
+            $store->execute('UPDATE whmcsmigrator_run SET status=?,updated_at=UTC_TIMESTAMP() WHERE id=?', [$status, $id]);
+        } finally {
+            $store->unlock($lock);
+        }
+
+        return $this->status($id);
+    }
+
+    public function batch(string $run, string $request, int $limit): array
+    {
+        return (new Engine($this->store(), $this->vault()))->batch($run, $request, $limit);
+    }
+
+    public function retry(string $run): array
+    {
+        return (new Engine($this->store(), $this->vault()))->retry($run);
+    }
+
+    public function status(string $id): array
+    {
+        $run = $this->store()->run($id);
+        unset($run['schema_json'], $run['mapping_json']);
+        $run['plan'] = json_decode($run['plan_json'], true, 128, JSON_THROW_ON_ERROR);
+        unset($run['plan_json']);
+        $run['categories'] = $this->store()->all('SELECT table_name,expected,maximum,after_id,processed,imported,archived,skipped,failed,status FROM whmcsmigrator_cursor WHERE run_id=? ORDER BY id', [$id]);
+        $run['errors'] = $this->store()->all("SELECT table_name,source_key,error_type,message,retryable,attempts FROM whmcsmigrator_attempt WHERE run_id=? AND status='failed' ORDER BY id LIMIT 100", [$id]);
+        $run['reconciliation'] = (new Reconciler($this->store()))->summary($id);
+        $run['product_pricing'] = $this->store()->all('SELECT currency,native_applied,COUNT(*) AS price_rows FROM whmcsmigrator_price WHERE run_id=? GROUP BY currency,native_applied ORDER BY currency', [$id]);
+        $run['credit_publication'] = $this->store()->all('SELECT source_key,status,message,attempts FROM whmcsmigrator_credit_result WHERE run_id=? ORDER BY source_key LIMIT 100', [$id]);
+
+        return $run;
+    }
+
+    public function runs(): array
+    {
+        return $this->store()->all('SELECT r.id,r.source_id,s.label,r.status,r.mode,r.created_at,r.updated_at,r.last_batch_at FROM whmcsmigrator_run r JOIN whmcsmigrator_source s ON s.id=r.source_id ORDER BY r.created_at DESC LIMIT 50');
+    }
+
+    public function archive(array $input): array
+    {
+        $source = (int) ($input['source_id'] ?? 0);
+        $key = trim((string) ($input['source_key'] ?? ''));
+        $table = trim((string) ($input['table_name'] ?? ''));
+        $where = 'source_id=?';
+        $values = [$source];
+        if ($key !== '') {
+            $where .= ' AND source_key=?';
+            $values[] = $key;
+        }
+        if ($table !== '') {
+            $where .= ' AND table_name=?';
+            $values[] = $table;
+        }
+        if (trim((string) ($input['legacy_reference'] ?? '')) !== '') {
+            $kind = (string) ($input['legacy_kind'] ?? 'invoice');
+            if (!in_array($kind, ['invoice', 'ticket'], true)) throw new SafeException('Legacy reference kind must be invoice or ticket.');
+            $where .= ' AND EXISTS (SELECT 1 FROM whmcsmigrator_legacy_reference r WHERE r.source_id=whmcsmigrator_archive.source_id AND r.table_name=whmcsmigrator_archive.table_name AND r.source_key=whmcsmigrator_archive.source_key AND r.kind=? AND r.reference_hash=?)';
+            $values[] = $kind;
+            $values[] = hash('sha256', trim((string) $input['legacy_reference']));
+        }
+        $offset = max(0, min(100000000, (int) ($input['offset'] ?? 0)));
+        $rows = $this->store()->all('SELECT id,table_name,source_key,payload,original_dates,relationships,exclusions,run_id,created_at,updated_at FROM whmcsmigrator_archive WHERE ' . $where . ' ORDER BY id LIMIT 25 OFFSET ' . $offset, $values);
+        foreach ($rows as &$row) {
+            foreach (['payload', 'original_dates', 'relationships', 'exclusions'] as $field) {
+                $row[$field] = json_decode($row[$field], true, 128, JSON_THROW_ON_ERROR);
+            }
+            $row['destinations'] = $this->store()->all('SELECT destination_entity,destination_id FROM whmcsmigrator_identity WHERE source_id=? AND table_name=? AND source_key=?', [$source, $row['table_name'], $row['source_key']]);
+        }
+
+        return ['records' => $rows, 'next_offset' => count($rows) === 25 ? $offset + 25 : null];
+    }
+}
