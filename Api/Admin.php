@@ -122,6 +122,11 @@ final class Admin extends \FOSSBilling\Api\AbstractApi
         return $this->guarded('view', fn (): array => $this->getService()->status((string) ($data['run_id'] ?? '')));
     }
 
+    public function run_existing(array $data): ?array
+    {
+        return $this->guarded('view', fn (): ?array => $this->getService()->existingRun($data));
+    }
+
     public function run_control(array $data): array
     {
         return $this->guarded('execute', fn (): array => $this->getService()->control((string) ($data['run_id'] ?? ''), (string) ($data['action'] ?? '')));

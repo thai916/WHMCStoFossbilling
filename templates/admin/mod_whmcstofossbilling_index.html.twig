@@ -16,6 +16,11 @@
             <details class="mt-2"><summary>Supported records and migration limits</summary><p>Native clients, catalog, closed tickets and email history are supported. Historical mode also supports eligible inactive hosting, representable historical invoices, payments and verified credit aggregates. Active services, domains, unpaid invoices and unsupported financial cases remain blocked natively; eligible source records stay in the private legacy archive. Attachments require a separate file transfer.</p><ul id="wm-blockers" class="mt-2"></ul></details>
     </div>
     <div id="wm-notice" class="alert d-none" role="status" aria-live="polite"></div>
+    <div id="wm-preparation" class="wm-preparation d-none mb-3" aria-busy="false">
+        <div class="d-flex justify-content-between gap-2"><span id="wm-preparation-label" role="status" aria-live="polite">Checking settings</span><strong id="wm-preparation-percent"></strong></div>
+        <div id="wm-preparation-track" class="progress mt-2" role="progressbar" aria-label="Run preparation"><div id="wm-preparation-bar" class="progress-bar wm-working" style="width:100%"></div></div>
+        <small>Preparation checks only. Migration progress below measures records scanned after you resume.</small>
+    </div>
     <div id="wm-schema-warning" class="alert alert-warning d-none">This preview needs additional extension-owned tracking tables. No schema change runs automatically. <button class="btn btn-warning" id="wm-schema-upgrade" type="button">Upgrade extension tables only</button></div>
     <nav class="wm-steps mb-3" aria-label="Migration steps">
         <button type="button" class="btn btn-primary" data-step="connection">1 · Connect</button>
@@ -106,6 +111,7 @@
     <section data-panel="progress" class="card d-none">
         <div class="card-header"><h3 class="card-title">Migration runs</h3></div>
         <div class="card-body">
+            <div id="wm-existing-run" class="alert alert-info d-none"><strong>Continuing with your existing run.</strong><p id="wm-existing-description" class="mb-2"></p><div class="d-flex flex-wrap gap-2"><button id="wm-view-existing" class="btn btn-outline-primary" type="button">View existing run</button><button id="wm-replace-existing" class="btn btn-outline-warning" type="button">Cancel existing run and create a new one</button></div></div>
             <label class="form-label" for="wm-runs">Select a run</label><select class="form-select" id="wm-runs"><option value="">Select a run…</option></select>
             <div id="wm-run-summary" class="mt-3"></div>
             <progress class="wm-progress" id="wm-progress" max="100" value="0" aria-label="Records scanned"></progress>

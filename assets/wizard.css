@@ -11,6 +11,13 @@
 #whmcstofossbilling .wm-progress{width:100%;height:1rem;accent-color:#206bc4}
 #whmcstofossbilling .wm-top-progress .progress{height:1.25rem}
 #whmcstofossbilling .wm-top-progress .progress-bar{transition:width .2s ease}
+#whmcstofossbilling .wm-preparation{padding:1rem;border:1px solid var(--tblr-border-color);border-radius:6px;background:var(--tblr-bg-surface)}
+#whmcstofossbilling .wm-preparation small{display:block;margin-top:.5rem;color:var(--tblr-secondary)}
+#whmcstofossbilling .wm-preparation .progress{height:1rem}
+#whmcstofossbilling .wm-preparation .progress-bar{transition:width .25s ease}
+#whmcstofossbilling .wm-working{background-image:linear-gradient(45deg,rgba(255,255,255,.2) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.2) 50%,rgba(255,255,255,.2) 75%,transparent 75%,transparent);background-size:2rem 2rem;animation:wm-progress-stripes 1s linear infinite}
+#whmcstofossbilling .wm-indeterminate{opacity:.65}
+@keyframes wm-progress-stripes{to{background-position:2rem 0}}
 #whmcstofossbilling .wm-top-progress span{overflow-wrap:anywhere}
 #whmcstofossbilling .wm-mapping-table{min-width:900px}
 #whmcstofossbilling .wm-mapping-table td{vertical-align:middle;white-space:normal}
@@ -59,7 +66,7 @@
 @media(max-width:1100px){#whmcstofossbilling .wm-table-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:767px){#whmcstofossbilling .wm-review-intro{grid-template-columns:1fr;gap:1rem}#whmcstofossbilling .wm-analysis-actions{align-items:flex-start;flex-direction:column;gap:.75rem}#whmcstofossbilling .wm-analysis-actions p{flex:auto}#whmcstofossbilling .card-body{padding:1rem}}
 @media(max-width:540px){#whmcstofossbilling .wm-table-grid,#whmcstofossbilling .wm-preservation-summary{grid-template-columns:1fr}#whmcstofossbilling .wm-table-toolbar{align-items:stretch;flex-direction:column}#whmcstofossbilling .wm-table-search{flex:auto}#whmcstofossbilling .wm-selection-summary{text-align:left}}
-@media(prefers-reduced-motion:reduce){#whmcstofossbilling .wm-top-progress .progress-bar{transition:none}#whmcstofossbilling .wm-spinner{animation:none}}
+@media(prefers-reduced-motion:reduce){#whmcstofossbilling .wm-top-progress .progress-bar,#whmcstofossbilling .wm-preparation .progress-bar{transition:none}#whmcstofossbilling .wm-spinner,#whmcstofossbilling .wm-working{animation:none}}
 #whmcstofossbilling #wm-connection .row{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:1rem;margin:0}
 #whmcstofossbilling #wm-connection .row>*{width:100%;margin:0;padding:0;grid-column:span 12}
 #whmcstofossbilling #wm-connection .row>.col-md-3{grid-column:span 3}

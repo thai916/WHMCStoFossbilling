@@ -5,6 +5,7 @@
     if (!root) return;
     const $ = id => document.getElementById(`wm-${id}`);
     let source = null, profile = null, defaultProfile = null, run = null, pumping = false, preparing = false;
+    let observer = null, replacement = null, watchVersion = 0;
     const counts = new Map();
     function batchRequestId() {
         const webcrypto = globalThis.crypto;
@@ -27,13 +28,54 @@
         $("notice").textContent = text;
     };
     function scrollToTop() {
+        const behavior = matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth";
         // Admin themes can scroll a content container instead of the document.
         for (let node = root.parentElement; node; node = node.parentElement) {
             if (node.scrollHeight > node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) {
-                node.scrollTo({ top: 0, left: 0, behavior: "instant" });
+                node.scrollTo({ top: 0, left: 0, behavior });
             }
         }
-        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        window.scrollTo({ top: 0, left: 0, behavior });
+    }
+    function preparation(label, completed = null, total = null, active = true) {
+        $("preparation").classList.remove("d-none");
+        $("preparation").setAttribute("aria-busy", String(active));
+        $("preparation-label").textContent = label;
+        const measurable = total !== null && total > 0;
+        const percent = measurable ? Math.floor(completed / total * 100) : null;
+        $("preparation-percent").textContent = percent === null ? "" : `${percent}%`;
+        $("preparation-bar").style.width = `${percent === null ? 100 : percent}%`;
+        $("preparation-bar").classList.toggle("wm-working", active);
+        $("preparation-bar").classList.toggle("wm-indeterminate", active && !measurable);
+        if (percent === null) $("preparation-track").removeAttribute("aria-valuenow");
+        else $("preparation-track").setAttribute("aria-valuenow", String(percent));
+        $("preparation-track").setAttribute("aria-valuetext", label);
+    }
+    function stopPreparation() {
+        $("preparation").setAttribute("aria-busy", "false");
+        $("preparation-bar").classList.remove("wm-working", "wm-indeterminate");
+    }
+    function stopWatching() { clearTimeout(observer); observer = null; ++watchVersion; }
+    function watchRun() {
+        stopWatching();
+        if (!run || run.status !== "running" || pumping) return;
+        const id = run.id;
+        const version = watchVersion;
+        observer = setTimeout(async () => {
+            if (pumping || run?.id !== id || run.status !== "running") return;
+            try {
+                if (!document.hidden) {
+                    const updated = await api("run_status", { run_id: id });
+                    if (run?.id !== id || pumping || watchVersion !== version) return;
+                    run = updated; renderRun();
+                }
+                watchRun();
+            } catch (error) {
+                if (watchVersion !== version || run?.id !== id) return;
+                $("progress-bar").classList.remove("wm-working");
+                notice(`${error.message} Automatic status refresh stopped. Use Refresh status after resolving this.`, true);
+            }
+        }, 2500);
     }
     function sessionError(message) {
         const error = new Error(message);
@@ -81,6 +123,9 @@
         if (button) button.disabled = true;
         try { await fn(event); } catch (error) {
             pumping = false;
+            stopPreparation();
+            stopWatching();
+            $("progress-bar").classList.remove("wm-working");
             notice(error.name === "TimeoutError" ? "The response timed out. No further batches were scheduled. Refresh run status before resuming." : error.message, true);
             if (error.pendingTables?.length) {
                 const details = element("details");
@@ -91,11 +136,13 @@
         } finally { if (button) button.disabled = false; }
     };
     function step(name) {
+        if (name !== "progress") stopWatching();
         root.querySelectorAll("[data-panel]").forEach(panel => panel.classList.toggle("d-none", panel.dataset.panel !== name));
         root.querySelectorAll("[data-step]").forEach(button => {
             button.classList.toggle("btn-primary", button.dataset.step === name);
             button.classList.toggle("btn-outline-secondary", button.dataset.step !== name);
         });
+        if (name === "progress") watchRun();
     }
     root.querySelectorAll("[data-step]").forEach(button => button.addEventListener("click", () => step(button.dataset.step)));
     function selectOptions(select, rows, placeholder) {
@@ -113,6 +160,10 @@
         $("blockers").replaceChildren(...data.environment.blockers.map(text => element("li", text)));
         selectOptions($("sources"), data.sources.map(row => [row.id, `${row.label} · tested ${row.tested_at} UTC`]), "Select a tested source…");
         selectOptions($("runs"), data.runs.map(row => [row.id, `${row.created_at} UTC · ${row.mode} · ${row.status} · ${row.label}`]), "Select a run…");
+        if (run && !data.runs.some(row => row.id === run.id)) {
+            const option = element("option", `${run.mode} · ${run.status} · opened run`);
+            option.value = run.id; $("runs").append(option);
+        }
         if (source) $("sources").value = String(source.source_id);
         if (run) $("runs").value = run.id;
     }
@@ -368,10 +419,12 @@
     $("mode").addEventListener("change", describeMode);
     describeMode();
     async function analyzeTables(tables, sourceId) {
+        preparation(`Analyzing tables · 0 of ${tables.length} finished`, 0, tables.length);
         for (let index = 0; index < tables.length; index++) {
             if (source?.source_id !== sourceId) throw new Error("The selected source changed. Review the source and tables before trying again. No run was created.");
             const table = tables[index];
             notice(`Analyzing ${index + 1}/${tables.length}: ${table}. One read-only request per table.`);
+            preparation(`Analyzing ${table} · ${index} of ${tables.length} finished`, index, tables.length);
             let result;
             try {
                 result = await api("analyze_table", { source_id: sourceId, table });
@@ -383,6 +436,7 @@
             counts.set(table, result.count);
             const node = [...$("tables").querySelectorAll("[data-table-count]")].find(item => item.dataset.tableCount === table);
             if (node) node.textContent = `Eligible · ${result.count} records`;
+            preparation(`Analyzed ${index + 1} of ${tables.length} tables · ${table}`, index + 1, tables.length);
         }
     }
     async function prepareCounts(selection, target, force = false) {
@@ -406,31 +460,67 @@
         if (!source) throw new Error("Select a source first.");
         if (preparing) throw new Error("Wait for the current analysis or run preparation to finish.");
         preparing = true;
+        preparation("Checking selected tables");
         try {
             await prepareCounts(selectedTables(), $("mode").value, true);
             notice("Selected table counts captured, including required dependencies. They are not a transactionally consistent whole-database snapshot.");
-        } finally { preparing = false; }
+        } finally { preparing = false; stopPreparation(); }
     }));
+    async function openExisting(existing, request) {
+        pumping = false; stopWatching();
+        run = existing.run;
+        replacement = { ...request, runId: run.id };
+        $("existing-run").classList.remove("d-none");
+        const changed = existing.differences.length ? `Your new choices differ: ${existing.differences.join(", ")}. ` : "";
+        $("existing-description").textContent = `${changed}This run keeps its saved settings and authorizations. ${run.status === "running" ? "Watching status only; this tab is not scheduling batches. If no other tab is processing, use Resume processing to continue here." : "It remains paused. Use Resume processing when ready."} No records were cancelled or overwritten.`;
+        renderRun(); step("progress");
+        $("preparation").classList.add("d-none");
+        notice("Continuing with your existing run. Review its saved settings and progress below.");
+        watchRun(); scrollToTop();
+        await dashboard();
+    }
     async function createRun(mode, extra = {}) {
         if (preparing) return;
         preparing = true;
         scrollToTop();
         notice("Preparing your paused run. Checking mappings and read-only table counts; no import is running.");
+        preparation("Checking for an unfinished run");
+        let request = null;
         try {
             if (!source) throw new Error("Select a source first.");
             const sourceId = source.source_id, selection = selectedTables(), target = mode === "dry_run" ? $("mode").value : mode;
+            request = { sourceId };
+            if (mode !== "dry_run") {
+                const existing = await api("run_existing", { source_id: sourceId, tables: selection, mode, ...extra, profile });
+                if (source?.source_id !== sourceId) throw new Error("The selected source changed. Review it before trying again.");
+                if (existing) { await openExisting(existing, request); return; }
+            }
+            preparation("Checking settings and field mappings");
             await saveMapping();
             if (source?.source_id !== sourceId) throw new Error("The selected source changed. Review the source and tables before trying again. No run was created.");
             const prepared = await prepareCounts(selection, target);
             if (source?.source_id !== sourceId) throw new Error("The selected source changed. Review the source and tables before trying again. No run was created.");
+            preparation("Creating your paused run…");
             run = await api("run_create", { source_id: sourceId, tables: selection, mode, ...extra, target_mode: target });
+            replacement = null; stopWatching(); $("existing-run").classList.add("d-none");
+            $("preparation").classList.add("d-none");
             // Reveal the successful run even if refreshing the dashboard subsequently fails.
             renderRun(); step("progress");
             scrollToTop();
             notice(`Run created paused. Review its mode and expected counts, then explicitly resume.${prepared.refreshed.length ? ` Read-only counts refreshed for: ${prepared.refreshed.join(", ")}.` : ""}${prepared.dependencies.length ? ` Required dependencies included: ${prepared.dependencies.join(", ")}.` : ""}`);
             await dashboard();
+        } catch (error) {
+            // Another tab can create a run after our early check. Keep the locked
+            // backend guard, then recover by opening that run rather than retrying writes.
+            if (request && /Another archival\/native run/.test(error.message)) {
+                const existing = await api("run_existing", { source_id: request.sourceId, tables: selectedTables(), mode, ...extra, profile });
+                if (existing) { await openExisting(existing, request); return; }
+            }
+            $("preparation-label").textContent = `Preparation stopped · ${$("preparation-label").textContent}. Review the message above.`;
+            throw error;
         } finally {
             preparing = false;
+            stopPreparation();
             scrollToTop();
         }
     }
@@ -441,9 +531,51 @@
     }));
     $("authorize").addEventListener("invalid", event => {
         event.preventDefault();
-        notice("Complete the required authorization fields: backup reference, backup and limitations confirmations, and the PRESERVE HISTORY phrase. No run was created.", true);
+        if (preparing) return;
+        const explain = () => notice("Complete the required authorization fields: backup reference, backup and limitations confirmations, and the PRESERVE HISTORY phrase. No run was created.", true);
         scrollToTop();
+        if (!source || replacement) { explain(); return; }
+        // Opening saved work needs no new backup/authorization form. Missing
+        // fields must still prevent creation if no existing run is found.
+        preparing = true;
+        preparation("Checking for an unfinished run");
+        handle(async () => {
+            try {
+                const sourceId = source.source_id, data = Object.fromEntries(new FormData($("authorize")));
+                const existing = await api("run_existing", { source_id: sourceId, tables: selectedTables(), ...data, profile });
+                if (source?.source_id !== sourceId) throw new Error("The selected source changed. Review it before trying again.");
+                if (existing) await openExisting(existing, { sourceId });
+                else { $("preparation").classList.add("d-none"); explain(); }
+            } finally { preparing = false; stopPreparation(); scrollToTop(); }
+        })(event);
     }, true);
+    $("view-existing").addEventListener("click", () => { renderRun(); scrollToTop(); });
+    $("replace-existing").addEventListener("click", handle(async () => {
+        if (!replacement || preparing || pumping) return;
+        const pending = replacement;
+        if (source?.source_id !== pending.sourceId || run?.id !== pending.runId) throw new Error("The source or run changed. Review your selections again.");
+        if (!$("authorize").checkValidity()) { step("analysis"); $("authorize").reportValidity(); return; }
+        const data = Object.fromEntries(new FormData($("authorize")));
+        if (data.confirmation !== "PRESERVE HISTORY" || !data.backup_reference?.trim() || !data.backup_verified || !data.accept_limitations || (data.mode === "historical_native" && !data.destination_exclusive)) {
+            step("analysis");
+            throw new Error("Review your backup reference, type PRESERVE HISTORY exactly, and confirm the required safety checkboxes before cancelling existing work. Historical financial mode also requires the private, idle destination confirmation.");
+        }
+        const snapshot = JSON.stringify({ data, tables: selectedTables(), profile });
+        if (!window.confirm("Cancel future batches for this existing run and create a new paused run using your current reviewed choices? Already imported records and history will remain. Nothing will be deleted or rolled back.")) return;
+        stopWatching();
+        preparing = true;
+        try {
+            const prior = await api("run_status", { run_id: pending.runId });
+            run = ["paused", "running"].includes(prior.status) ? await api("run_control", { run_id: pending.runId, action: "cancel" }) : prior;
+            renderRun();
+        }
+        finally { preparing = false; }
+        replacement = null; $("existing-run").classList.add("d-none");
+        if (source?.source_id !== pending.sourceId || snapshot !== JSON.stringify({ data: Object.fromEntries(new FormData($("authorize"))), tables: selectedTables(), profile })) {
+            throw new Error("The previous run was cancelled, but your choices changed. Review the form and create a new run when ready. Existing imported records remain intact.");
+        }
+        await createRun(data.mode, data);
+    }));
     function dataTable(headers, rows) {
         const wrap = element("div", undefined, "table-responsive");
         const table = element("table", undefined, "table table-vcenter");
@@ -463,6 +595,7 @@
         $("progress-label").textContent = `${run.mode} · ${run.status} · ${processed}/${expected} records scanned`;
         $("progress-percent").textContent = `${percent}%`;
         $("progress-bar").style.width = `${percent}%`;
+        $("progress-bar").classList.toggle("wm-working", run.status === "running");
         const track = $("progress-bar").parentElement;
         track.setAttribute("aria-valuenow", String(percent));
         track.setAttribute("aria-valuetext", `${percent}% · ${processed} of ${expected} records scanned`);
@@ -488,9 +621,9 @@
         run = await api("run_status", { run_id: run.id }); renderRun();
     }
     $("runs").addEventListener("change", handle(async () => {
-        pumping = false;
+        pumping = false; stopWatching(); replacement = null; $("existing-run").classList.add("d-none");
         if (!$("runs").value) return;
-        run = { id: $("runs").value }; await refreshRun();
+        run = { id: $("runs").value }; await refreshRun(); watchRun();
     }));
     $("refresh").addEventListener("click", handle(refreshRun));
     $("retry").addEventListener("click", handle(async () => {
@@ -501,6 +634,7 @@
     }));
     $("resume").addEventListener("click", handle(async () => {
         if (!run || pumping) throw new Error("Select a paused/running run. This tab must not already be processing.");
+        stopWatching();
         run = await api("run_control", { run_id: run.id, action: "resume" });
         pumping = true; renderRun();
         while (pumping && run.status === "running") {
@@ -509,7 +643,7 @@
             if (result.status !== "running") break;
             await new Promise(resolve => setTimeout(resolve, 200));
         }
-        pumping = false;
+        pumping = false; stopWatching();
         notice("Batch scheduling stopped. Review status and exceptions; this is not a declaration of a complete migration.");
     }));
     ["pause", "cancel"].forEach(action => $(action).addEventListener("click", handle(async () => {

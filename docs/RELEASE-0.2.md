@@ -127,6 +127,33 @@ The exact cause of an individual administrator session being rejected has not
 been established through a real authenticated admin session. The local anonymous
 API is verified to return `Authentication Failed`/201 before source access.
 
+## Continue saved work and show preparation progress
+
+- Creating an authorized run first checks for an unfinished non-preview run for
+  that source. The wizard opens it automatically before mapping saves or source
+  count reads, even when new authorization fields are empty. Saved plans and
+  authorizations remain unchanged; mode/table/date-policy/mapping/schema/timezone
+  differences are explained. Paused runs still need explicit Resume processing.
+- A running existing run is watched with read-only status requests every 2.5
+  seconds while its progress screen is open. This does not schedule batches or
+  prove another worker is active. Use Resume processing explicitly if processing
+  needs to continue in this tab. Hidden tabs skip status reads; navigation,
+  processing in this tab and errors stop observation.
+- Cancellation/replacement is an explicit confirmed action. Previously imported
+  records and preserved evidence are never deleted or rolled back. The new run
+  uses the current reviewed form and still passes the normal authorization and
+  planner gates. Changes during cancellation require another review.
+- The source lock and overlapping-run guard remain unchanged. If another tab
+  creates a run between the early lookup and creation, the wizard opens that
+  existing run rather than retrying writes or cancelling it automatically.
+  Cancelled/finished runs and dry-run previews are not reused as unfinished work.
+- A separate preparation indicator animates settings checks and run creation.
+  Table analysis shows completed tables / total and an actual percentage, not an
+  elapsed-time estimate or migration-completion claim. Animation stops on failure;
+  normal record-scanning progress takes over when the paused run is shown.
+- Scrolling is now smooth for the document and nested admin scroll containers.
+  Reduced-motion preferences disable smooth scrolling, stripes and transitions.
+
 ## Upgrade / important limits
 
 Remove the old `modules/Whmcsmigrator/` directory and install this asset as

@@ -253,8 +253,18 @@ try {
     expect((int) $store->one('SELECT COUNT(*) AS n FROM client')['n'] === 0 && (int) $store->one('SELECT COUNT(*) AS n FROM whmcstofossbilling_snapshot')['n'] === 0, 'Advanced dry-run validation creates neither business records nor preserved-history snapshots');
     $authorized = $runInput + ['mode' => 'reference_native', 'confirmation' => 'PRESERVE HISTORY', 'backup_verified' => true, 'backup_reference' => 'disposable fixture snapshot', 'accept_limitations' => true, 'destination_exclusive' => true];
     $run = $service->createRun($authorized, 1);
+    $existing = $service->existingRun($authorized);
+    expect($existing['run']['id'] === $run['id'] && $existing['run']['status'] === 'paused' && $existing['differences'] === [], 'Unfinished-run lookup returns the paused run with matching saved choices');
+    $savedPlan = $service->store()->run($run['id'])['plan_json'];
+    $different = $service->existingRun(array_replace($authorized, ['mode' => 'archive', 'tables' => ['tblclients'], 'invalid_date_fallback' => '1900']));
+    expect(in_array('execution mode', $different['differences'], true) && in_array('selected tables', $different['differences'], true) && in_array('invalid-date policy', $different['differences'], true), 'Existing-run lookup reports mode/table/date-policy differences without changing the plan');
+    expect($service->store()->run($run['id'])['plan_json'] === $savedPlan && $sourceDigest() === $before, 'Existing-run lookup neither rewrites immutable history plans nor modifies the source');
+    $service->control($run['id'], 'cancel');
+    expect($service->existingRun($authorized) === null, 'Cancelled runs do not block or get offered as unfinished history work');
+    $run = $service->createRun($authorized, 1);
     rejects(fn () => $service->createRun($authorized, 1), 'A source cannot have overlapping unfinished non-preview runs');
     $service->control($run['id'], 'resume');
+    expect($service->existingRun($authorized)['run']['status'] === 'running', 'Running unfinished runs are discoverable without resuming or scheduling batches');
     $service->batch($run['id'], bin2hex(random_bytes(16)), 1);
     $service->control($run['id'], 'pause');
     rejects(fn () => $service->batch($run['id'], bin2hex(random_bytes(16)), 1), 'Paused run refuses future batches');
@@ -273,6 +283,7 @@ try {
         echo json_encode($status['errors'], JSON_PRETTY_PRINT), PHP_EOL;
     }
     expect($status['status'] === 'partial_archived', 'Run reports partial archival, never a complete billing migration');
+    expect($service->existingRun($authorized) === null, 'Finished historical runs are not offered as unfinished even while previews exist');
     expect((int) $store->one('SELECT COUNT(*) AS n FROM client')['n'] === 3, 'Clients imported natively');
     expect($store->one('SELECT created_at FROM client WHERE aid=?', ['whmcs:' . $profile['source_id'] . ':1'])['created_at'] === '2004-02-29 00:00:00', 'Original client registration date survives persistence');
     $timestampRow = $clientTimestamp + ['firstname' => 'Zone', 'lastname' => 'Fixture', 'currency' => 1, 'groupid' => 0, 'status' => 'Closed', 'notes' => '', 'credit' => '0.00'];

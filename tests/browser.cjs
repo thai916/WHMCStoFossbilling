@@ -41,6 +41,8 @@ const source = {
 let currentRun = null;
 let failNextCreation = false, failNextAnalysis = false;
 let connectionGate = null, preparationGate = null, analysisFailure = null, connectionFailure = null;
+let syntheticExisting = null, raceExisting = null;
+const analysisGates = [];
 const analyzedTables = new Set();
 let schemaUpgradeRequired = true;
 let ipLookups = 0;
@@ -76,6 +78,7 @@ const server = http.createServer((request, response) => {
     });
     try {
         const page = await browser.newPage(), errors = [];
+        const waitTop = async () => page.waitForFunction(() => window.scrollY === 0 && (!document.getElementById("nested-admin-scroll") || document.getElementById("nested-admin-scroll").scrollTop === 0));
         page.on("pageerror", error => errors.push(error.message));
         await page.route("**/api/admin/whmcstofossbilling/**", async route => {
             const request = route.request(), method = request.url().split("/").pop(), data = request.postDataJSON();
@@ -126,6 +129,7 @@ const server = http.createServer((request, response) => {
                     break;
                 }
                 case "analyze_table":
+                    if (analysisGates.length) await analysisGates.shift();
                     if (analysisFailure) {
                         const failure = analysisFailure; analysisFailure = null;
                         await route.fulfill(failure);
@@ -139,6 +143,11 @@ const server = http.createServer((request, response) => {
                     analyzedTables.add(data.table);
                     result = { table: data.table, count: 1, maximum: "1" }; break;
                 case "run_create":
+                    if (raceExisting) {
+                        syntheticExisting = raceExisting; raceExisting = null;
+                        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ error: { message: "Another archival/native run for this source is unfinished. Finish or cancel it before creating another non-preview run." } }) });
+                        return;
+                    }
                     if (failNextCreation) {
                         failNextCreation = false;
                         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ error: { message: "Source counts need refreshing: tblclients (stale), tblcurrencies (missing). Analyze these tables again." } }) });
@@ -153,7 +162,11 @@ const server = http.createServer((request, response) => {
                     }
                     currentRun = { id: "a".repeat(32), mode: data.mode, status: "paused", last_batch_at: null, categories: [{ table_name: "tblclients", expected: 1, processed: 0, imported: 0, archived: 0, skipped: 0, failed: 0 }], errors: [], reconciliation: { reason: "Not performed" } };
                     result = currentRun; break;
-                case "run_control": currentRun.status = data.action === "resume" ? "running" : "paused"; result = currentRun; break;
+                case "run_existing": result = syntheticExisting; break;
+                case "run_control":
+                    currentRun.status = data.action === "resume" ? "running" : data.action === "cancel" ? "cancelled" : "paused";
+                    if (data.action === "cancel") syntheticExisting = null;
+                    result = currentRun; break;
                 case "run_batch":
                     assert.match(data.request_id, /^[a-f0-9]{32}$/, "Batch idempotency key stays 32 lowercase hex characters without randomUUID");
                     batchRequestIds.push(data.request_id);
@@ -168,6 +181,10 @@ const server = http.createServer((request, response) => {
             await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ result, error: null }) });
         });
         await page.addInitScript(() => {
+            window.TEST_SCROLL_BEHAVIORS = [];
+            const windowScroll = window.scrollTo.bind(window), elementScroll = Element.prototype.scrollTo;
+            window.scrollTo = (...args) => { window.TEST_SCROLL_BEHAVIORS.push(args[0]?.behavior); return windowScroll(...args); };
+            Element.prototype.scrollTo = function (...args) { window.TEST_SCROLL_BEHAVIORS.push(args[0]?.behavior); return elementScroll.apply(this, args); };
             // Test clipboard wiring without changing the user's real clipboard.
             Object.defineProperty(navigator, "clipboard", { value: { writeText: async text => { window.TEST_COPIED_IP = text; } } });
             // Reproduce non-secure origins such as http://fossbill.test where randomUUID is unavailable.
@@ -271,7 +288,20 @@ const server = http.createServer((request, response) => {
         await page.locator("#wm-mode").selectOption("archive");
         assert.match(await page.locator("#wm-mode-description").innerText(), /Does not create normal FOSSBilling clients/);
         await page.locator("#wm-mode").selectOption("historical_native");
+        let releaseFirst, releaseSecond;
+        analysisGates.push(new Promise(resolve => { releaseFirst = resolve; }), new Promise(resolve => { releaseSecond = resolve; }));
         await page.locator("#wm-analyze").click();
+        await page.waitForFunction(() => document.getElementById("wm-preparation-label").textContent.includes("Analyzing tblclients"));
+        assert.equal(await page.locator("#wm-preparation-percent").innerText(), "0%", "Count preparation starts at zero completed tables");
+        assert.equal(await page.locator("#wm-preparation-bar").evaluate(el => getComputedStyle(el).animationName), "wm-progress-stripes");
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        assert.equal(await page.locator("#wm-preparation-bar").evaluate(el => getComputedStyle(el).animationName), "none", "Preparation animation respects reduced motion");
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        releaseFirst();
+        await page.waitForFunction(() => document.getElementById("wm-preparation-label").textContent.includes("1 of 42"));
+        assert.equal(await page.locator("#wm-preparation-percent").innerText(), "2%", "Preparation percent measures completed table requests, not elapsed time");
+        await page.screenshot({ path: path.join(artifacts, "preparation-progress.png"), fullPage: true });
+        releaseSecond();
         await page.getByText("Selected table counts captured, including required dependencies.", { exact: false }).waitFor();
         assert.equal(await page.locator('#wm-tables input[value="tblconfiguration"]').isDisabled(), true);
         assert.equal(await page.locator("#wm-tables").evaluate(el => getComputedStyle(el).gridTemplateColumns.split(" ").length), 3, "Desktop table list uses three columns");
@@ -323,6 +353,7 @@ const server = http.createServer((request, response) => {
         const createsBeforeInvalid = requests.filter(name => name === "run_create").length;
         await authorize.click();
         await page.getByText("Complete the required authorization fields:", { exact: false }).waitFor();
+        await waitTop();
         assert.equal(await page.evaluate(() => window.scrollY), 0, "Missing authorization fields scroll to the error without submitting");
         assert.equal(requests.filter(name => name === "run_create").length, createsBeforeInvalid);
         await page.locator("#wm-backup").fill("Synthetic browser fixture — not a real authorization");
@@ -346,9 +377,11 @@ const server = http.createServer((request, response) => {
         analyzedTables.delete("tblclients");
         await authorize.click();
         await page.waitForFunction(() => document.getElementById("wm-notice").textContent.includes("Preparing your paused run"));
+        await waitTop();
         assert.equal(await page.locator("#nested-admin-scroll").evaluate(el => el.scrollTop), 0, "Scroll happens immediately before the pending preparation request finishes");
         releasePreparation();
         await page.getByText("FOSSBilling could not authenticate your administrator session.", { exact: false }).waitFor();
+        await waitTop();
         assert.doesNotMatch(await page.locator("#wm-notice").innerText(), /Test the WHMCS connection again/, "Session failure does not prescribe changing WHMCS credentials or schema");
         assert.equal(await page.locator("#wm-notice details").getAttribute("open"), null, "Pending tables are collapsed instead of flooding the error");
         assert.equal(requests.filter(name => name === "run_create").length, authFailureRequestCount, "Authentication failure stops before run creation");
@@ -361,6 +394,7 @@ const server = http.createServer((request, response) => {
             analysisFailure = failure;
             await authorize.click();
             await page.waitForFunction(() => document.getElementById("wm-notice").classList.contains("alert-danger") && !document.querySelector("#wm-authorize button").disabled);
+            await waitTop();
             assert.match(await page.locator("#wm-notice").innerText(), /FOSSBilling/);
             assert.equal(await page.locator("#nested-admin-scroll").evaluate(el => el.scrollTop), 0);
             assert.equal(requests.filter(name => name === "run_create").length, authFailureRequestCount, "Failed session/token responses never create a run");
@@ -385,15 +419,21 @@ const server = http.createServer((request, response) => {
         await page.getByText("Count refresh stopped at tblclients.", { exact: false }).waitFor();
         await page.waitForFunction(() => window.scrollY === 0);
         assert.match(await page.locator("#wm-notice").innerText(), /schema changed.*tblclients/);
+        assert.equal(await page.locator("#wm-preparation").getAttribute("aria-busy"), "false", "Failed preparation stops its busy state");
+        assert.equal(await page.locator("#wm-preparation-bar").evaluate(el => el.classList.contains("wm-working")), false, "Failure stops progress animation");
         assert.equal(await page.evaluate(() => window.scrollY), 0, "Schema-change failure scrolls to top");
+        assert.equal(await page.evaluate(() => window.TEST_SCROLL_BEHAVIORS.includes("smooth")), true, "Normal scroll requests use smooth motion");
+        await page.emulateMedia({ reducedMotion: "reduce" });
         failNextCreation = true;
         await authorize.click();
         await page.getByText("tblclients (stale), tblcurrencies (missing)", { exact: false }).waitFor();
         await page.waitForFunction(() => window.scrollY === 0);
         assert.equal(await page.evaluate(() => window.scrollY), 0, "Authorized-run failure scrolls to top");
+        assert.equal(await page.evaluate(() => window.TEST_SCROLL_BEHAVIORS.at(-1)), "instant", "Reduced motion disables smooth scrolling");
+        await page.emulateMedia({ reducedMotion: "no-preference" });
         await authorize.click();
         await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("archive · paused"));
-        await page.waitForFunction(() => window.scrollY === 0);
+        await waitTop();
         assert.equal(await page.evaluate(() => window.scrollY), 0, "Authorized-run success scrolls to top");
         assert.equal(await page.locator("#nested-admin-scroll").evaluate(el => el.scrollTop), 0, "Authorized-run success scrolls the nested admin container");
         assert.equal(requests.filter(name => name === "run_batch").length, batchesBeforeAuthorization, "Authorized creation remains paused without scheduling batches");
@@ -403,6 +443,52 @@ const server = http.createServer((request, response) => {
         await page.locator("#wm-refresh").click();
         await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("0/0 records scanned"));
         assert.equal(await page.locator("#wm-progress-percent").innerText(), "0%", "An empty source stays at zero percent");
+        const beforeExisting = requests.length;
+        syntheticExisting = { run: currentRun, differences: ["execution mode", "invalid-date policy"] };
+        await page.locator('[data-step="analysis"]').click();
+        await page.locator("#wm-backup").fill("");
+        await authorize.click();
+        await page.locator("#wm-existing-run").waitFor({ state: "visible" });
+        await waitTop();
+        assert.match(await page.locator("#wm-existing-description").innerText(), /execution mode, invalid-date policy/);
+        assert.match(await page.locator("#wm-existing-description").innerText(), /remains paused/);
+        await page.waitForFunction(() => document.getElementById("wm-runs").value === "a".repeat(32));
+        assert.equal(requests.slice(beforeExisting).includes("analyze_table"), false, "Existing-run lookup avoids unnecessary source count reads");
+        assert.equal(requests.slice(beforeExisting).includes("mapping_save"), false, "Existing run is opened before changing saved mappings");
+        assert.equal(requests.slice(beforeExisting).includes("run_create"), false, "Existing run is reused without creating a duplicate");
+        assert.equal(requests.slice(beforeExisting).includes("run_control"), false, "Existing run is not resumed or cancelled automatically");
+        await page.screenshot({ path: path.join(artifacts, "existing-run.png"), fullPage: true });
+        assert.equal(await page.locator("#wm-backup").inputValue(), "", "Opening saved work does not require a new backup authorization");
+        await page.locator('[data-step="analysis"]').click();
+        await page.locator("#wm-backup").fill("Synthetic browser fixture — not a real authorization");
+        await page.locator('[data-step="progress"]').click();
+        const controlsBeforeDecline = requests.filter(name => name === "run_control").length;
+        page.once("dialog", dialog => dialog.dismiss());
+        await page.locator("#wm-replace-existing").click();
+        assert.equal(requests.filter(name => name === "run_control").length, controlsBeforeDecline, "Declined replacement does not cancel history processing");
+        // Observe a run already processing elsewhere; this tab must send only status requests.
+        currentRun.status = "running"; currentRun.categories[0].expected = 1;
+        await page.locator('[data-step="analysis"]').click();
+        await authorize.click();
+        await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("archive · running"));
+        const batchesBeforeWatch = requests.filter(name => name === "run_batch").length;
+        currentRun.categories[0].processed = 1;
+        await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("1/1 records scanned"));
+        assert.equal(requests.filter(name => name === "run_batch").length, batchesBeforeWatch, "Watching an existing running run never schedules duplicate batches");
+        currentRun.status = "paused";
+        await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("archive · paused"));
+        assert.equal(await page.locator("#wm-progress-bar").evaluate(el => el.classList.contains("wm-working")), false, "Animation stops when a watched run pauses");
+        page.once("dialog", dialog => dialog.accept());
+        await page.locator("#wm-replace-existing").click();
+        await page.waitForFunction(() => document.getElementById("wm-existing-run").classList.contains("d-none") && !document.getElementById("wm-preparation").getAttribute("aria-busy").includes("true"));
+        assert.equal(requests.filter(name => name === "run_control").length, controlsBeforeDecline + 1, "Explicit replacement cancels the previous run once");
+        // A second tab can create a run after the early lookup; recover from the locked guard.
+        raceExisting = { run: { ...currentRun, id: "c".repeat(32), status: "paused" }, differences: [] };
+        await page.locator('[data-step="analysis"]').click();
+        await authorize.click();
+        await page.waitForFunction(() => document.getElementById("wm-run-summary").textContent.includes("c".repeat(32)));
+        assert.equal(await page.locator("#wm-existing-run").isVisible(), true, "Creation race opens the existing run instead of leaking the overlap error");
+        assert.equal(await page.locator("#wm-preparation").getAttribute("aria-busy"), "false");
         await page.locator('[data-step="archive"]').click();
         await page.locator('[name="legacy_reference"]').fill("LEGACY-001");
         await page.locator("#wm-archive-search button").click();
@@ -426,7 +512,7 @@ const server = http.createServer((request, response) => {
         await page.screenshot({ path: path.join(artifacts, "mobile.png"), fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile connection page has no horizontal overflow");
         assert.deepEqual(errors, [], "No browser JavaScript errors");
-        console.log("PASS: synthetic browser wizard, connection spinner across success/failure/timeout, default broadest history and plain-English modes, session/CSRF/HTML/401 diagnostics distinct from database/IP errors, cross-origin request refusal, immediate nested-container scrolling before preparation and after validation/failure/success, 43-table responsive 3/2/1-column review, selection-safe search, automatic dependency counts, paused authorized creation without batches, preservation/preview summaries, zero-expected progress, date fallback, missing-randomUUID idempotency, legacy search, financial displays, XSS protection and no browser storage");
+        console.log("PASS: synthetic browser wizard, honest animated preparation percentages, smooth/reduced-motion scrolling, automatic paused/running existing-run discovery without new authorization or duplicate batches, read-only status observation, saved-settings differences, explicit replacement confirmation and creation-race recovery; connection/session controls, responsive 3/2/1-column review, safe search, preview/native summaries, idempotency, legacy search, financial displays, XSS protection and no browser storage");
         const livePage = await browser.newPage();
         await livePage.goto("http://fossbill.test/admin/whmcstofossbilling");
         await livePage.waitForLoadState("networkidle");

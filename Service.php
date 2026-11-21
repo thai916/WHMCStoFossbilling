@@ -215,6 +215,43 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         return ['tables' => $selection, 'issues' => Planner::analysisIssues($this->store(), (int) $source['id'], $schema, $selection)];
     }
 
+    public function existingRun(array $input): ?array
+    {
+        $source = $this->store()->source((int) ($input['source_id'] ?? 0));
+        $existing = $this->store()->one("SELECT id FROM whmcstofossbilling_run WHERE source_id=? AND mode<>'dry_run' AND status IN ('running','paused') ORDER BY created_at,id LIMIT 1", [$source['id']]);
+        if (!$existing) return null;
+        $saved = $this->store()->run($existing['id']);
+        $schema = json_decode($source['schema_json'], true, 128, JSON_THROW_ON_ERROR);
+        $selection = $input['tables'] ?? [];
+        if (!is_array($selection) || count($selection) > 500) throw new SafeException('Invalid source selection.');
+        foreach ($selection as $name) {
+            if (!is_string($name) || !isset($schema[$name])) throw new SafeException('Unknown source selection.');
+        }
+        $mode = (string) ($input['mode'] ?? 'archive');
+        if (!in_array($mode, ['archive', 'reference_native', 'historical_native'], true)) throw new SafeException('Unknown migration mode.');
+        if ($mode !== 'archive') $selection = Dependencies::expand($schema, $selection);
+        $selection = array_values(array_unique($selection));
+        sort($selection);
+        $plan = json_decode($saved['plan_json'], true, 128, JSON_THROW_ON_ERROR);
+        $savedTables = array_keys($plan['tables']);
+        sort($savedTables);
+        $differences = [];
+        if ($mode !== $saved['mode']) $differences[] = 'execution mode';
+        if ($selection !== $savedTables) $differences[] = 'selected tables';
+        if (($plan['invalid_date_fallback'] ?? null) !== (($input['invalid_date_fallback'] ?? '') === '1900' ? NativeWriter::DATE_FALLBACK : null)) $differences[] = 'invalid-date policy';
+        try {
+            $mapping = Profile::validate($input['profile'] ?? json_decode($source['mapping_json'], true, 128, JSON_THROW_ON_ERROR), $schema);
+            if (Store::json($mapping) !== $saved['mapping_json']) $differences[] = 'field mappings';
+        } catch (SafeException) {
+            $differences[] = 'field mappings need review';
+        }
+        if ($source['schema_json'] !== $saved['schema_json']) $differences[] = 'source schema';
+        $options = $this->vault()->open($source['credentials']);
+        if (($options['source_timezone'] ?? '') !== ($plan['source_timezone'] ?? '')) $differences[] = 'source timezone';
+
+        return ['run' => $this->status($existing['id']), 'differences' => $differences];
+    }
+
     public function createRun(array $input, int $admin): array
     {
         $this->requirements();
