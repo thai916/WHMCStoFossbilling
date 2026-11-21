@@ -307,7 +307,7 @@
         await dashboard(); renderRun(); step("progress");
         notice("Run created paused. Review its mode and expected counts, then explicitly resume.");
     }
-    $("dry-run").addEventListener("click", handle(async () => createRun("dry_run")));
+    $("dry-run").addEventListener("click", handle(async () => createRun("dry_run", { invalid_date_fallback: $("invalid-date-fallback").checked ? "1900" : "" })));
     $("authorize").addEventListener("submit", handle(async () => {
         const data = Object.fromEntries(new FormData($("authorize")));
         await createRun(data.mode, data);
@@ -325,10 +325,23 @@
         if (!run) return;
         const expected = run.categories.reduce((sum, row) => sum + Number(row.expected), 0);
         const processed = run.categories.reduce((sum, row) => sum + Number(row.processed), 0);
-        $("run-summary").replaceChildren(element("h4", `${run.mode} · ${run.status}`), element("p", `Run ${run.id} · ${processed}/${expected} scanned · Last batch ${run.last_batch_at || "not started"} UTC`), element("p", run.reconciliation.reason, "text-warning"));
-        $("progress").value = expected ? Math.min(100, processed / expected * 100) : 0;
+        // Scanned/expected, not migrated/complete: exceptions and archive-only rows stay visible below.
+        const percent = expected > 0 ? Math.min(100, Math.floor(processed / expected * 100)) : 0;
+        $("top-progress").classList.remove("d-none");
+        $("progress-label").textContent = `${run.mode} · ${run.status} · ${processed}/${expected} records scanned`;
+        $("progress-percent").textContent = `${percent}%`;
+        $("progress-bar").style.width = `${percent}%`;
+        const track = $("progress-bar").parentElement;
+        track.setAttribute("aria-valuenow", String(percent));
+        track.setAttribute("aria-valuetext", `${percent}% · ${processed} of ${expected} records scanned`);
+        $("run-summary").replaceChildren(element("h4", `${run.mode} · ${run.status}`), element("p", `Run ${run.id} · ${processed}/${expected} scanned (${percent}%) · Last batch ${run.last_batch_at || "not started"} UTC`), element("p", run.reconciliation.reason, "text-warning"));
+        $("progress").value = percent;
         const preview = run.mode === "dry_run";
         $("counts").replaceChildren(dataTable(["Source table", "Expected", "Scanned", "Native imported", preview ? "Previewed" : "Archive only", "Unchanged / linked", "Failed"], run.categories.map(row => [row.table_name, row.expected, row.processed, row.imported, row.archived, row.skipped, row.failed])));
+        const fallbacks = run.date_fallbacks || [];
+        $("date-fallbacks").replaceChildren(fallbacks.length
+            ? dataTable(["Table", "WHMCS ID", "Original value", "Applied native date"], fallbacks.map(row => [row.table_name, row.source_key, row.original_value, "1900-01-01 00:00:00"]))
+            : element("p", "None. No invalid date was substituted in this run."));
         $("errors").replaceChildren(dataTable(["Table", "WHMCS ID", "Error", "Attempts"], run.errors.map(row => [row.table_name, row.source_key, row.message, row.attempts])));
         const financial = [];
         Object.entries(run.reconciliation.totals_by_currency || {}).forEach(([metric, totals]) => totals.forEach(total => financial.push([metric, total.currency, total.source_total, total.native_total ?? "Not represented", total.source_records, total.native_records])));

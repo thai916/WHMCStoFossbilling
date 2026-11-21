@@ -46,6 +46,19 @@ Direction: **WHMCS 8.x → FOSSBilling 0.8.9**.
   keeps the 32-character lowercase hex idempotency key that prevents duplicate
   batch processing.
 
+## Historical dates and progress
+
+- Invalid calendar dates such as `0000-00-00` still fail closed by default. An
+  administrator can explicitly opt in to native client registration dates using
+  `1900-01-01 00:00:00`. The exact source value remains in the archive and every
+  substitution is listed under **Date substitutions** and in the JSON/CSV report.
+  Daylight-saving gaps, ambiguous timestamps and unverified timezones are never
+  substituted. Run plans are immutable, so an existing run cannot be switched to
+  this policy; create a newly reviewed run.
+- A top progress bar shows scanned/expected records and a percentage on every
+  step. It measures scanning, not migration completion; exceptions and archive-only
+  records stay visible in the run report.
+
 ## Upgrade / important limits
 
 Replace the `modules/Whmcsmigrator/` directory with this release's directory.

@@ -107,6 +107,7 @@ const server = http.createServer((request, response) => {
                 case "run_create":
                     assert.equal(data.mode, "dry_run", "Browser suite never authorizes a real import");
                     assert.equal(data.target_mode, "historical_native", "Preview keeps the explicitly selected target mode");
+                    assert.equal(data.invalid_date_fallback, "1900", "Explicit invalid-date policy is submitted with the run plan");
                     currentRun = { id: "a".repeat(32), mode: data.mode, status: "paused", last_batch_at: null, categories: [{ table_name: "tblclients", expected: 1, processed: 0, imported: 0, archived: 0, skipped: 0, failed: 0 }], errors: [], reconciliation: { reason: "Not performed" } };
                     result = currentRun; break;
                 case "run_control": currentRun.status = data.action === "resume" ? "running" : "paused"; result = currentRun; break;
@@ -193,12 +194,23 @@ const server = http.createServer((request, response) => {
         await page.getByText("Selected table counts captured.", { exact: false }).waitFor();
         assert.equal(await page.locator('#wm-tables input[value="tblconfiguration"]').isDisabled(), true);
         await page.locator("#wm-mode").selectOption("historical_native");
+        await page.locator("#wm-invalid-date-fallback").check();
         await page.locator("#wm-dry-run").click();
         assert.equal(requests.includes("run_batch"), false, "Preview creation cannot start scheduling before explicit Resume");
+        await page.locator("#wm-top-progress").waitFor({ state: "visible" });
+        assert.equal(await page.locator("#wm-top-progress").isVisible(), true, "Top progress bar appears as soon as a run exists");
+        assert.equal(await page.locator("#wm-progress-percent").innerText(), "0%", "A newly created run starts at zero percent");
+        assert.match(await page.locator("#wm-progress-label").innerText(), /dry_run · paused · 0\/1 records scanned/);
+        assert.equal(await page.locator("#wm-top-progress [role=progressbar]").getAttribute("aria-valuenow"), "0");
         await page.locator("#wm-resume").click();
         await page.waitForFunction(() => document.getElementById("wm-run-summary").textContent.includes("preview_finished"));
         assert.ok(batchRequestIds.length >= 1, "Resume schedules at least one batch when randomUUID is unavailable");
         assert.equal(new Set(batchRequestIds).size, batchRequestIds.length, "Fallback batch ids remain unique");
+        assert.equal(await page.locator("#wm-progress-percent").innerText(), "100%", "Top progress bar reaches 100% after all expected records are scanned");
+        assert.equal(await page.locator("#wm-progress-bar").evaluate(el => el.style.width), "100%");
+        assert.equal(await page.locator("#wm-top-progress [role=progressbar]").getAttribute("aria-valuenow"), "100");
+        assert.match(await page.locator("#wm-progress-label").innerText(), /preview_finished · 1\/1 records scanned/);
+        assert.match(await page.locator("#wm-date-fallbacks").innerText(), /No invalid date was substituted/);
         await page.locator('[data-step="archive"]').click();
         await page.locator('[name="legacy_reference"]').fill("LEGACY-001");
         await page.locator("#wm-archive-search button").click();
@@ -209,6 +221,8 @@ const server = http.createServer((request, response) => {
         await page.locator('[data-step="progress"]').click();
         await page.locator("#wm-runs").selectOption(historicalRunId);
         await page.waitForFunction(() => document.getElementById("wm-run-summary").textContent.includes("requires_action"));
+        assert.equal(await page.locator("#wm-progress-percent").innerText(), "100%", "Top progress follows the selected run");
+        assert.match(await page.locator("#wm-progress-label").innerText(), /requires_action · 3\/3 records scanned/);
         const financialRows = await page.locator("#wm-financial tbody tr").allTextContents();
         assert.ok(financialRows.some(row => row.includes("USD") && row.includes("30.00") && row.includes("25.00")), "Source/native credit discrepancy remains visible");
         assert.ok(financialRows.some(row => row.includes("EUR") && row.includes("Not represented")), "Missing native value is not rendered as zero");
@@ -220,7 +234,7 @@ const server = http.createServer((request, response) => {
         await page.screenshot({ path: path.join(artifacts, "mobile.png"), fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile connection page has no horizontal overflow");
         assert.deepEqual(errors, [], "No browser JavaScript errors");
-        console.log("PASS: synthetic browser wizard, standard no-TLS default plus all explicitly selected security modes, risk confirmations, conditional CA fields, explicit WHMCS timezone dropdown with America/Chicago default, dark-green success text, connection diagnostics, explicit public-IP controls, schema upgrade, historical preview/resume with missing-randomUUID fallback, legacy search, financial displays, XSS protection, no browser storage, desktop/mobile layout");
+        console.log("PASS: synthetic browser wizard, standard no-TLS default plus all explicitly selected security modes, risk confirmations, conditional CA fields, explicit WHMCS timezone dropdown with America/Chicago default, dark-green success text, connection diagnostics, explicit public-IP controls, schema upgrade, top percentage progress bar, opt-in invalid-date policy, historical preview/resume with missing-randomUUID fallback, legacy search, financial displays, XSS protection, no browser storage, desktop/mobile layout");
         const livePage = await browser.newPage();
         await livePage.goto("http://fossbill.test/admin/whmcsmigrator");
         await livePage.waitForLoadState("networkidle");

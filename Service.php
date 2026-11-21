@@ -212,6 +212,10 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
             throw new SafeException('Confirm a verified destination backup, acknowledge the limitations and type PRESERVE HISTORY.');
         }
         if ($mode === 'historical_native' && empty($input['destination_exclusive'])) throw new SafeException('Historical financial publication requires explicit confirmation of an otherwise idle, private destination. This tool does not disable global automation.');
+        $invalidFallback = (string) ($input['invalid_date_fallback'] ?? '');
+        if ($invalidFallback !== '' && $invalidFallback !== '1900') {
+            throw new SafeException('Unknown invalid-date policy. Only the explicit 1900 fallback is available.');
+        }
         $target = $mode === 'dry_run' ? (string) ($input['target_mode'] ?? 'reference_native') : $mode;
         if (!in_array($target, ['archive', 'reference_native', 'historical_native'], true)) throw new SafeException('Unknown dry-run target mode.');
         $selection = $input['tables'] ?? [];
@@ -250,6 +254,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         $plan['source_security_mode'] = ConnectionOptions::validate($options, true)['security_mode'];
         $plan['source_prefix'] = $options['prefix'];
         $plan['adapter_revision'] = 2;
+        $plan['invalid_date_fallback'] = $invalidFallback === '1900' ? NativeWriter::DATE_FALLBACK : null;
         $plan['target_mode'] = $target;
         $plan['native_entities'] = $target === 'archive' ? [] : NativeWriter::ENTITIES;
         if ($target !== 'historical_native') unset($plan['native_entities']['invoices'], $plan['native_entities']['accounts'], $plan['native_entities']['hosting']);
@@ -318,6 +323,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         unset($run['plan_json']);
         $run['categories'] = $this->store()->all('SELECT table_name,expected,maximum,after_id,processed,imported,archived,skipped,failed,status FROM whmcsmigrator_cursor WHERE run_id=? ORDER BY id', [$id]);
         $run['errors'] = $this->store()->all("SELECT table_name,source_key,error_type,message,retryable,attempts FROM whmcsmigrator_attempt WHERE run_id=? AND status='failed' ORDER BY id LIMIT 100", [$id]);
+        $run['date_fallbacks'] = $this->store()->all("SELECT table_name,source_key,message AS original_value FROM whmcsmigrator_attempt WHERE run_id=? AND status='date_fallback' ORDER BY id LIMIT 100", [$id]);
         $run['reconciliation'] = (new Reconciler($this->store()))->summary($id);
         $run['product_pricing'] = $this->store()->all('SELECT currency,native_applied,COUNT(*) AS price_rows FROM whmcsmigrator_price WHERE run_id=? GROUP BY currency,native_applied ORDER BY currency', [$id]);
         $run['credit_publication'] = $this->store()->all('SELECT source_key,status,message,attempts FROM whmcsmigrator_credit_result WHERE run_id=? ORDER BY source_key LIMIT 100', [$id]);

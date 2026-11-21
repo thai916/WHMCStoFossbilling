@@ -62,6 +62,8 @@ Resolve missing native dependencies, duplicate emails, invalid dates or field-si
 
 The retry button processes up to five failures per request and allows at most five total attempts per record. Mapping snapshots are immutable within a run; a changed mapping needs a new run.
 
+Invalid client registration dates (`0000-00-00` or impossible calendar values) fail closed by default and remain in the archive. With the explicit **1900-01-01** checkbox selected when the run is created, those clients import natively with `created_at = 1900-01-01 00:00:00`; the original value stays in `whmcsmigrator_archive.original_dates` and is shown under **Date substitutions** and in the JSON/CSV report. Daylight-saving gaps, ambiguous timestamps and unverified application timezones are still hard failures. Do not edit source records to satisfy the importer. Because run plans are immutable, an existing run cannot be switched to this policy; create a new reviewed run.
+
 Credit-publication failures are separately visible and share the bounded retry workflow. After a successful retry, the run pauses; Resume refreshes financial assessment. An old native run predating the new capability revision must be cancelled and recreated with a reviewed plan.
 
 Changed native source records require manual review. Existing destination values are not overwritten. A source data change can add an archive revision while the corresponding native update remains blocked.

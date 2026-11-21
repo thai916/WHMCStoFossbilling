@@ -16,6 +16,8 @@ use Box\Mod\Whmcsmigrator\Security\SafeException;
  */
 final class NativeWriter
 {
+    public const DATE_FALLBACK = '1900-01-01 00:00:00';
+
     public const ENTITIES = [
         'currencies' => 'currency', 'clientgroups' => 'client_group', 'clients' => 'client',
         'productgroups' => 'product_category', 'products' => 'product',
@@ -25,8 +27,25 @@ final class NativeWriter
         'hosting' => 'client_order',
     ];
 
-    public function __construct(private readonly Store $store, private readonly int $source, private readonly string $prefix, private readonly ?string $timezone = null)
+    private ?string $dateFallbackOriginal = null;
+
+    public function __construct(private readonly Store $store, private readonly int $source, private readonly string $prefix, private readonly ?string $timezone = null, private readonly ?string $invalidDateFallback = null)
     {
+    }
+
+    private function registrationDate(mixed $value): ?string
+    {
+        $this->dateFallbackOriginal = null;
+        $used = false;
+        $date = \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc($value, $this->timezone, $this->invalidDateFallback, $used);
+        if ($used && is_string($value)) $this->dateFallbackOriginal = $value;
+
+        return $date;
+    }
+
+    public function dateFallbackOriginal(): ?string
+    {
+        return $this->dateFallbackOriginal;
     }
 
     public static function date(mixed $value): ?string
@@ -46,6 +65,7 @@ final class NativeWriter
 
     public function import(string $suffix, array $row, array $rules, string $checksum, string $run): string
     {
+        $this->dateFallbackOriginal = null;
         if (isset(HistoryImporter::ENTITIES[$suffix])) {
             return (new HistoryImporter($this->store, $this->source, $this->prefix, $this->timezone))->import($suffix, $row, $checksum, $run);
         }
@@ -93,8 +113,9 @@ final class NativeWriter
         }
         $current = $this->store->one('SELECT * FROM `' . $entity . '` WHERE id=?', [$id]);
         $this->store->execute('INSERT INTO whmcsmigrator_identity (source_id,table_name,source_key,destination_entity,destination_id,checksum,destination_checksum,run_id,created_at) VALUES (?,?,?,?,?,?,?,?,UTC_TIMESTAMP())', [$this->source, $this->prefix . $suffix, $key, $entity, $id, $checksum, hash('sha256', Store::json($current)), $run]);
+        $status = $linked ? 'skipped' : 'imported';
 
-        return $linked ? 'skipped' : 'imported';
+        return $status === 'imported' && $this->dateFallbackOriginal !== null ? 'date_fallback' : $status;
     }
 
     public function validateClientPreview(array $row, array $rules): void
@@ -114,7 +135,7 @@ final class NativeWriter
                 throw new SafeException('Client email conflicts with an existing destination account. No automatic link or merge is allowed.');
             }
         }
-        \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc($row['datecreated'] ?? null, $this->timezone);
+        $this->registrationDate($row['datecreated'] ?? null);
     }
 
     private function currency(array $row): array
@@ -161,7 +182,7 @@ final class NativeWriter
             'pass' => password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT),
             'tax_exempt' => !empty($row['taxexempt']) ? 1 : 0,
             'client_group_id' => empty($row['groupid']) ? null : $this->resolve('clientgroups', (string) $row['groupid']),
-            'created_at' => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc($row['datecreated'] ?? null, $this->timezone), 'updated_at' => null,
+            'created_at' => $this->registrationDate($row['datecreated'] ?? null), 'updated_at' => null,
         ];
     }
 

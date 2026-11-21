@@ -186,9 +186,13 @@ try {
     expect((int) $service->store()->one('SELECT COUNT(*) AS n FROM client')['n'] === 0 && (int) $service->store()->one('SELECT COUNT(*) AS n FROM invoice')['n'] === 0, 'All connection/timezone tests and failed preflight leave destination business tables empty');
     $service->confirmSourceTimezone($profile['source_id'], 'UTC');
     rejects(fn () => $service->createRun($runInput + ['mode' => 'archive'], 1), 'Destination writes require backup and explicit confirmation');
+    rejects(fn () => $service->createRun($runInput + ['mode' => 'archive', 'invalid_date_fallback' => 'epoch', 'confirmation' => 'PRESERVE HISTORY', 'backup_verified' => true, 'backup_reference' => 'disposable fixture', 'accept_limitations' => true], 1), 'Only the explicit 1900 invalid-date policy is accepted');
     $dry = $service->createRun($runInput + ['mode' => 'dry_run'], 1);
     $dryPlan = json_decode($service->store()->run($dry['id'])['plan_json'], true, 128, JSON_THROW_ON_ERROR);
     expect($dryPlan['source_security_mode'] === 'standard' && $dryPlan['source_timezone'] === 'UTC' && $dryPlan['source_timezone_evidence']['confidence'] === 'administrator_verified', 'Run plans freeze source security mode and verified timezone evidence');
+    expect($dryPlan['invalid_date_fallback'] === null, 'Historical dates stay strict unless the 1900 fallback is explicitly selected');
+    $fallbackPreview = $service->createRun($runInput + ['mode' => 'dry_run', 'invalid_date_fallback' => '1900'], 1);
+    expect(json_decode($service->store()->run($fallbackPreview['id'])['plan_json'], true, 128, JSON_THROW_ON_ERROR)['invalid_date_fallback'] === \Box\Mod\Whmcsmigrator\Destination\NativeWriter::DATE_FALLBACK, 'Opt-in preview freezes the explicit 1900 policy in its plan');
     $service->confirmSourceTimezone($profile['source_id'], 'Asia/Kolkata');
     expect(json_decode($service->store()->run($dry['id'])['plan_json'], true, 128, JSON_THROW_ON_ERROR)['source_timezone'] === 'UTC', 'A later profile timezone override cannot rewrite an already-authorized run snapshot');
     $service->confirmSourceTimezone($profile['source_id'], 'UTC');
@@ -232,6 +236,7 @@ try {
         if (++$batches > 100) throw new RuntimeException('Unbounded migration');
     } while ($result['status'] === 'running');
     $status = $service->status($run['id']);
+    expect($status['date_fallbacks'] === [], 'Runs without invalid dates report no substitutions');
     if ($status['errors']) {
         echo json_encode($status['errors'], JSON_PRETTY_PRINT), PHP_EOL;
     }
@@ -249,6 +254,17 @@ try {
         } finally {
             $store->pdo->rollBack(); // Only these extra disposable adapter assertions.
         }
+    }
+    $zeroDateRow = ['id' => 998, 'email' => 'zero-date-fixture@example.invalid', 'datecreated' => '0000-00-00'] + array_diff_key($timestampRow, ['id' => true, 'email' => true, 'datecreated' => true]);
+    rejects(fn () => (new \Box\Mod\Whmcsmigrator\Destination\NativeWriter($store, $profile['source_id'], 'tbl'))->import('clients', $zeroDateRow, $clientRules, hash('sha256', Store::json($zeroDateRow)), $run['id']), 'Strict writer still refuses invalid client registration dates');
+    $fallbackWriter = new \Box\Mod\Whmcsmigrator\Destination\NativeWriter($store, $profile['source_id'], 'tbl', 'UTC', \Box\Mod\Whmcsmigrator\Destination\NativeWriter::DATE_FALLBACK);
+    $store->pdo->beginTransaction();
+    try {
+        expect($fallbackWriter->import('clients', $zeroDateRow, $clientRules, hash('sha256', Store::json($zeroDateRow)), $run['id']) === 'date_fallback', 'Opt-in writer reports a date substitution instead of a failure');
+        expect($fallbackWriter->dateFallbackOriginal() === '0000-00-00', 'Original invalid value remains available for the audit record');
+        expect($store->one('SELECT created_at FROM client WHERE aid=?', ['whmcs:' . $profile['source_id'] . ':998'])['created_at'] === \Box\Mod\Whmcsmigrator\Destination\NativeWriter::DATE_FALLBACK, 'Invalid client registration date imports with the explicit 1900 sentinel');
+    } finally {
+        $store->pdo->rollBack();
     }
     expect((int) $store->one("SELECT COUNT(*) AS n FROM product WHERE active=0 AND hidden=1 AND setup='manual'")['n'] === 4, 'Products and add-ons remain disabled, hidden and manually provisioned');
     $productId = $store->one("SELECT destination_id FROM whmcsmigrator_identity WHERE source_id=? AND table_name='tblproducts' AND source_key='1' AND destination_entity='product'", [$profile['source_id']])['destination_id'];

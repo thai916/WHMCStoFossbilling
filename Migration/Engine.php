@@ -76,7 +76,7 @@ final class Engine
             $definition = $schema[$name];
             $page = $reader->page($name, $definition, $cursor['after_id'], $cursor['maximum'], $limit);
             $rows = $page['rows'];
-            $native = new NativeWriter($this->store, (int) $source['id'], $options['prefix'], $plan['source_timezone'] ?? null);
+            $native = new NativeWriter($this->store, (int) $source['id'], $options['prefix'], $plan['source_timezone'] ?? null, $plan['invalid_date_fallback'] ?? null);
             $archive = new Repository($this->store);
             $started = microtime(true);
             $processed = 0;
@@ -115,10 +115,10 @@ final class Engine
                         }
                     }
                     if ($status !== 'failed') {
-                        $this->attempt($runId, $name, $key, $status, null, false);
+                        $this->attempt($runId, $name, $key, $status, $status === 'date_fallback' ? $native->dateFallbackOriginal() : null, false);
                     }
                     $column = match ($status) {
-                        'imported' => 'imported', 'skipped' => 'skipped', 'failed' => 'failed', default => 'archived',
+                        'imported', 'date_fallback' => 'imported', 'skipped' => 'skipped', 'failed' => 'failed', default => 'archived',
                     };
                     // Preview counts are separate in the report and are never described as actual archives.
                     $this->store->execute("UPDATE whmcsmigrator_cursor SET after_id=?,processed=processed+1,`$column`=`$column`+1 WHERE id=?", [$key, $cursor['id']]);
@@ -177,7 +177,7 @@ final class Engine
                 throw new SafeException('Destination schema changed; retries are blocked pending a new plan.');
             }
             $mapping = json_decode($run['mapping_json'], true, 128, JSON_THROW_ON_ERROR);
-            $native = new NativeWriter($this->store, (int) $source['id'], $options['prefix'], $plan['source_timezone'] ?? null);
+            $native = new NativeWriter($this->store, (int) $source['id'], $options['prefix'], $plan['source_timezone'] ?? null, $plan['invalid_date_fallback'] ?? null);
             $archive = new Repository($this->store);
             $failures = $this->store->all("SELECT * FROM whmcsmigrator_attempt WHERE run_id=? AND status='failed' AND attempts<5 ORDER BY id LIMIT " . $limit, [$runId]);
             $succeeded = 0;
@@ -207,9 +207,9 @@ final class Engine
                             ? $native->import($definition['suffix'], $row, $rules, $preserved['checksum'], $runId)
                             : ($preserved['changed'] ? 'archived' : 'skipped');
                     }
-                    $this->attempt($runId, $name, $key, $status, null, false);
+                    $this->attempt($runId, $name, $key, $status, $status === 'date_fallback' ? $native->dateFallbackOriginal() : null, false);
                     $column = match ($status) {
-                        'imported' => 'imported', 'skipped' => 'skipped', default => 'archived',
+                        'imported', 'date_fallback' => 'imported', 'skipped' => 'skipped', default => 'archived',
                     };
                     $this->store->execute("UPDATE whmcsmigrator_cursor SET failed=failed-1,`$column`=`$column`+1 WHERE run_id=? AND table_name=?", [$runId, $name]);
                     $this->store->pdo->commit();
@@ -236,7 +236,8 @@ final class Engine
 
     private function attempt(string $run, string $table, string $key, string $status, ?string $message, bool $retryable): void
     {
-        $this->store->execute('INSERT INTO whmcsmigrator_attempt (run_id,table_name,source_key,status,error_type,message,retryable,created_at,updated_at) VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE status=VALUES(status),error_type=VALUES(error_type),message=VALUES(message),retryable=VALUES(retryable),attempts=attempts+1,updated_at=UTC_TIMESTAMP()', [$run, $table, $key, $status, $message ? 'validation_or_adapter' : null, $message, (int) $retryable]);
+        $errorType = $status === 'date_fallback' ? 'invalid_historical_date' : ($message !== null ? 'validation_or_adapter' : null);
+        $this->store->execute('INSERT INTO whmcsmigrator_attempt (run_id,table_name,source_key,status,error_type,message,retryable,created_at,updated_at) VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE status=VALUES(status),error_type=VALUES(error_type),message=VALUES(message),retryable=VALUES(retryable),attempts=attempts+1,updated_at=UTC_TIMESTAMP()', [$run, $table, $key, $status, $errorType, $message, (int) $retryable]);
     }
 
     private function finalize(string $run, string $mode): void

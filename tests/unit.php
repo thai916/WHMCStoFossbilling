@@ -122,6 +122,17 @@ expect(\Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2010-01-01', null) === '20
 rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2010-01-01 00:00:00', null), 'Unknown source event timezone blocks native timestamp import');
 rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2026-03-08 02:30:00', 'America/New_York'), 'Nonexistent daylight-saving timestamp rejected');
 rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2026-11-01 01:30:00', 'America/New_York'), 'Ambiguous repeated daylight-saving timestamp rejected');
+$usedFallback = true;
+expect(\Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2010-01-01', null, NativeWriter::DATE_FALLBACK, $usedFallback) === '2010-01-01 00:00:00' && $usedFallback === false, 'Valid dates never report a substitution');
+$usedFallback = false;
+expect(\Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('0000-00-00', null, NativeWriter::DATE_FALLBACK, $usedFallback) === NativeWriter::DATE_FALLBACK && $usedFallback, 'Explicit opt-in substitutes a safe sentinel for an invalid calendar date');
+$usedFallback = false;
+expect(\Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('0000-00-00 00:00:00', 'UTC', NativeWriter::DATE_FALLBACK, $usedFallback) === NativeWriter::DATE_FALLBACK && $usedFallback, 'Explicit opt-in also covers impossible zero timestamps');
+$usedFallback = false;
+rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('2026-03-08 02:30:00', 'America/New_York', NativeWriter::DATE_FALLBACK, $usedFallback), 'Daylight-saving gaps are never replaced by a sentinel');
+$usedFallback = false;
+rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('not a date', null, NativeWriter::DATE_FALLBACK, $usedFallback), 'Malformed non-date text still requires review');
+rejects(fn () => \Box\Mod\Whmcsmigrator\Mapping\EventDate::utc('0000-00-00', null), 'Strict default still rejects zero dates without the explicit policy');
 expect(Decimal::tax('19.99', '10') === '2.00' && Decimal::round('-1.005') === '-1.01', 'Decimal-only native tax compatibility and half-up rounding');
 $price = [];
 foreach (\Box\Mod\Whmcsmigrator\Destination\ProductPricing::CYCLES as $column => [$target, $setup]) {

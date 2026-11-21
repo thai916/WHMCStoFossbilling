@@ -24,6 +24,10 @@
         <button type="button" class="btn btn-outline-secondary" data-step="progress">4 · Runs & reports</button>
         <button type="button" class="btn btn-outline-secondary" data-step="archive">Legacy archive</button>
     </nav>
+    <div id="wm-top-progress" class="wm-top-progress d-none mb-3">
+        <div class="d-flex justify-content-between gap-2 small mb-1"><span id="wm-progress-label" aria-live="polite">No active run</span><strong id="wm-progress-percent">0%</strong></div>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0%" aria-labelledby="wm-progress-label"><div id="wm-progress-bar" class="progress-bar" style="width:0%"></div></div>
+    </div>
     <section data-panel="connection" class="card">
         <div class="card-header"><h3 class="card-title">WHMCS database connection</h3></div>
         <div class="card-body">
@@ -84,6 +88,7 @@
                 <label class="form-label mt-3" for="wm-backup">Verified destination backup reference (no secrets)</label><input class="form-control" name="backup_reference" id="wm-backup" maxlength="255" required>
                 <label class="form-check mt-3"><input class="form-check-input" name="backup_verified" type="checkbox" value="1" required><span class="form-check-label">I verified that my destination database backup can be restored.</span></label>
                 <label class="form-check mt-2"><input class="form-check-input" name="accept_limitations" type="checkbox" value="1" required><span class="form-check-label">I understand 0.2 is incomplete. Active hosting/domain orders and unsafe financial records remain blocked. Independent currency prices and gateway fees may be archive-only. Archives contain private data and recognized secrets are redacted.</span></label>
+                <label class="form-check mt-2"><input class="form-check-input" id="wm-invalid-date-fallback" name="invalid_date_fallback" type="checkbox" value="1900"><span class="form-check-label">For invalid client registration dates, import 1900-01-01 00:00:00 natively. The exact original value stays in the archive and is listed in the run report.</span></label>
                 <label class="form-check mt-2"><input class="form-check-input" name="destination_exclusive" type="checkbox" value="1"><span class="form-check-label">For historical financial mode: the destination is private and no other administrator, customer or integration will create/change business records during this run. No global automation setting will be changed by this extension.</span></label>
                 <label class="form-label mt-3" for="wm-confirm">Type PRESERVE HISTORY to authorize destination writes</label><input id="wm-confirm" class="form-control" name="confirmation" required autocomplete="off">
                 <button class="btn btn-warning mt-3" type="submit">Create authorized run (starts paused)</button>
@@ -106,7 +111,8 @@
                 <button class="btn btn-outline-secondary" id="wm-report-csv" type="button">Export CSV report</button>
             </div>
             <p class="text-muted">Closing this tab stops future requests, not committed work. Reopen, select the run and resume. A cancelled run keeps imported records. There is no destructive automatic rollback.</p>
-            <div id="wm-counts"></div><h4 class="mt-3">Exceptions (first 100)</h4><div id="wm-errors"></div>
+            <div id="wm-counts"></div><h4 class="mt-3">Date substitutions (first 100)</h4><div id="wm-date-fallbacks"></div>
+            <h4 class="mt-3">Exceptions (first 100)</h4><div id="wm-errors"></div>
             <h4 class="mt-3">Financial snapshot assessment</h4><div id="wm-financial"></div>
             <h4 class="mt-3">Client credit publication</h4><div id="wm-credit-results"></div>
         </div>
