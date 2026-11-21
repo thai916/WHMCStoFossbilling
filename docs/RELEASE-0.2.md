@@ -43,7 +43,7 @@ Direction: **WHMCS 8.x → FOSSBilling 0.8.9**.
 
 Replace the `modules/Whmcsmigrator/` directory with this release's directory.
 No new tables, Composer changes, FOSSBilling core edits or global TLS changes are
-required. Retest saved source connections to populate the new diagnostics.
+required. Retest saved source connections to confirm the selected timezone and security diagnostics.
 Uninstall is not rollback; preserve backups and audit records.
 
 All existing production blockers remain: active services, domains, unpaid/draft
