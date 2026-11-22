@@ -11,7 +11,7 @@
         <div class="wm-brand"><img src="{{ migrator_icon }}" class="wm-logo" width="56" height="56" alt=""><div><div class="text-muted small">WHMCS 8.x → FOSSBilling 0.8.9</div><h2>WHMCStoFossbilling <span class="badge bg-orange-lt">0.2 · experimental</span></h2><p>Read-only at the source. Traceable at the destination.</p></div></div>
         <div class="wm-seal"><strong>SELECT ONLY</strong><span>Production source protection</span></div>
     </div>
-    <div class="alert alert-warning">
+    <div id="wm-limits" class="alert alert-warning d-none">
             <strong>Preserve history first. Publish supported records safely.</strong> This is not a complete billing migration. This experimental tool is not ready for a live billing cutover.
             <details class="mt-2"><summary>Supported records and migration limits</summary><p>Native clients, catalog, closed tickets and email history are supported. Historical mode also supports eligible inactive hosting, representable historical invoices, payments and verified credit aggregates. Active services, domains, unpaid invoices and unsupported financial cases remain blocked natively; eligible source records stay in the private legacy archive. Attachments require a separate file transfer.</p><ul id="wm-blockers" class="mt-2"></ul></details>
     </div>
@@ -22,7 +22,7 @@
         <small>Preparation checks only. Migration progress below measures records scanned after you resume.</small>
     </div>
     <div id="wm-schema-warning" class="alert alert-warning d-none">This preview needs additional extension-owned tracking tables. No schema change runs automatically. <button class="btn btn-warning" id="wm-schema-upgrade" type="button">Upgrade extension tables only</button></div>
-    <nav class="wm-steps mb-3" aria-label="Migration steps">
+    <nav id="wm-navigation" class="wm-steps mb-3 d-none" aria-label="Migration steps">
         <button type="button" class="btn btn-primary" data-step="connection">1 · Connect</button>
         <button type="button" class="btn btn-outline-secondary" data-step="mapping" disabled>2 · Map fields</button>
         <button type="button" class="btn btn-outline-secondary" data-step="analysis" disabled>3 · Review & preview</button>
@@ -33,9 +33,18 @@
         <div class="d-flex justify-content-between gap-2 small mb-1"><span id="wm-progress-label" aria-live="polite">No active run</span><strong id="wm-progress-percent">0%</strong></div>
         <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0%" aria-labelledby="wm-progress-label"><div id="wm-progress-bar" class="progress-bar" style="width:0%"></div></div>
     </div>
-    <section data-panel="connection" class="card">
-        <div class="card-header"><h3 class="card-title">WHMCS database connection</h3></div>
+    <section id="wm-source-choice" class="wm-source-choice">
+        <h3>Choose your WHMCS data source</h3><p class="text-muted">How would you like to bring your client history into FOSSBilling?</p>
+        <div class="wm-source-options">
+            <button id="wm-choose-database" type="button" class="wm-source-option"><span class="wm-source-symbol" aria-hidden="true">↔</span><strong>Connect to WHMCS database</strong><span>Read directly from your existing WHMCS installation using a SELECT-only account.</span><small>Choose this if you have database access.</small></button>
+            <button id="wm-choose-upload" type="button" class="wm-source-option"><span class="wm-source-symbol" aria-hidden="true">↑</span><strong>Upload WHMCS backup</strong><span>Choose a SQL, ZIP or GZIP file. No database connection details are needed.</span><small>Choose this if you have an exported backup.</small></button>
+        </div>
+    </section>
+    <section data-panel="connection" class="card d-none">
+        <div class="card-header"><h3 class="card-title">Prepare your WHMCS data</h3><button id="wm-change-source" type="button" class="btn btn-outline-secondary btn-sm">Change source type</button></div>
         <div class="card-body">
+            <div id="wm-destination-status" role="status" class="alert alert-info">Checking that FOSSBilling is fresh or contains only migration-owned records…</div>
+            <div id="wm-database-setup">
             <div class="alert alert-info">
                 <strong>Important: Remote Database Access</strong>
                 <p class="mb-1">Before connecting to your live WHMCS database, add the current public IP address of the FOSSBilling server to the Remote MySQL/Remote Database Access allowlist on the WHMCS hosting server.</p>
@@ -61,6 +70,20 @@
                 </div>
                 <div class="mt-3 d-flex gap-2 flex-wrap"><button class="btn btn-primary" id="wm-test-connection" type="submit"><span id="wm-connection-loader" class="wm-spinner d-none" aria-hidden="true"></span><span id="wm-connection-button-label">Test connection</span></button><button class="btn btn-outline-primary" id="wm-next" type="button" disabled>Next: Review field mapping</button></div>
             </form>
+            </div>
+            <div id="wm-upload-setup" class="d-none">
+                <h4>Upload your WHMCS backup</h4><p>Your file is read as data, never executed as SQL. No staging database is created and FOSSBilling table structures are not changed.</p>
+                <form id="wm-upload">
+                    <label class="form-label" for="wm-backup-file">WHMCS backup file</label><input id="wm-backup-file" type="file" accept=".sql,.gz,.zip" class="form-control" required aria-describedby="wm-upload-help">
+                    <p id="wm-upload-help" class="text-muted small mt-2">Select one file, including large backups. SQL, SQL.GZ/GZ and ZIP containing one SQL file are supported. Files are stored encrypted and processed in bounded steps. Use HTTPS or a trusted local connection.</p>
+                    <label class="form-label mt-3" for="wm-upload-timezone">WHMCS application timezone</label><select id="wm-upload-timezone" name="source_timezone" class="form-select" required>{% for timezone in migrator_timezones %}<option value="{{ timezone }}"{% if timezone == 'America/Chicago' %} selected{% endif %}>{{ timezone }}</option>{% endfor %}</select>
+                    <small>Choose the timezone used in WHMCS/PHP. We do not guess it from the backup.</small>
+                    <details class="mt-3"><summary>Backup details</summary><p class="small text-muted">Use a complete UTF-8 MySQL export with table structure and INSERT data, ordered by positive integer primary keys. Unsupported expressions, routines or formats are reported before migration; they are never executed or silently skipped. Upload limit: 64 GiB; expanded limit: 128 GiB, subject to available disk space and server limits.</p><label class="form-label" for="wm-upload-prefix">Table prefix</label><input id="wm-upload-prefix" name="prefix" value="tbl" class="form-control"><label class="form-label mt-2" for="wm-upload-version">WHMCS version</label><select id="wm-upload-version" name="confirm_whmcs8" class="form-select"><option value="">Detect from backup</option><option value="WHMCS 8.x">I verified this is WHMCS 8.x</option></select></details>
+                    <div class="d-flex gap-2 flex-wrap mt-3"><button id="wm-upload-start" type="submit" class="btn btn-primary">Upload & prepare backup</button><button id="wm-upload-pause" type="button" class="btn btn-outline-secondary d-none">Pause upload</button><button id="wm-upload-remove" type="button" class="btn btn-outline-danger d-none">Remove private backup</button><button id="wm-upload-next" type="button" class="btn btn-outline-primary" disabled>Next: Review field mapping</button></div>
+                </form>
+                <div id="wm-upload-status" class="mt-3" role="status" aria-live="polite"></div>
+                <div id="wm-upload-progress" class="progress mt-2 d-none" role="progressbar" aria-label="Backup upload and preparation"><div id="wm-upload-bar" class="progress-bar" style="width:0%"></div></div>
+            </div>
             <div id="wm-source-status" class="mt-3"></div>
             <div class="mt-3"><label class="form-label" for="wm-sources">Previously tested sources</label><select class="form-select" id="wm-sources"><option value="">Select a source…</option></select></div>
         </div>
@@ -98,8 +121,7 @@
             <div class="wm-analysis-actions"><div class="d-flex gap-2 flex-wrap"><button class="btn btn-outline-primary" id="wm-analyze" type="button">Analyze selected tables</button><button class="btn btn-primary" id="wm-dry-run" type="button">Create dry run</button></div><p>Read-only counts refresh automatically when needed, one table per request. A dry run does not save client history or create native records.</p></div>
             <form id="wm-authorize">
                 <div class="wm-authorization-heading"><h4>Authorize migration</h4><p>Writes to FOSSBilling only. The new run starts paused; review it before resuming.</p></div>
-                <label class="form-label mt-3" for="wm-backup">Verified destination backup reference (no secrets)</label><input class="form-control" name="backup_reference" id="wm-backup" maxlength="255" required>
-                <label class="form-check mt-3"><input class="form-check-input" name="backup_verified" type="checkbox" value="1" required><span class="form-check-label">I verified that my destination database backup can be restored.</span></label>
+                <p class="text-muted mt-3">For a fresh FOSSBilling installation, no destination backup reference is required. We check for unrelated business records before creating the run. Previously imported records from this migration can be resumed safely.</p>
                 <label class="form-check mt-2"><input class="form-check-input" name="accept_limitations" type="checkbox" value="1" required><span class="form-check-label">I understand 0.2 is incomplete. Active hosting/domain orders and unsafe financial records remain blocked. Independent currency prices and gateway fees may be archive-only. Archives contain private data and recognized secrets are redacted.</span></label>
                 <label class="form-check mt-2"><input class="form-check-input" id="wm-invalid-date-fallback" name="invalid_date_fallback" type="checkbox" value="1900"><span class="form-check-label">For invalid client registration dates, import 1900-01-01 00:00:00 natively. The exact original value stays in the archive and is listed in the run report.</span></label>
                 <label class="form-check mt-2"><input class="form-check-input" name="destination_exclusive" type="checkbox" value="1"><span class="form-check-label">For “Import the most supported client history”: this FOSSBilling installation is private and no other administrator, customer or integration will create/change business records during this run. No global automation setting will be changed by this extension.</span></label>

@@ -6,6 +6,7 @@
     const $ = id => document.getElementById(`wm-${id}`);
     let source = null, profile = null, defaultProfile = null, run = null, pumping = false, preparing = false;
     let observer = null, replacement = null, watchVersion = 0;
+    let chosenKind = null, needUpgrade = false, backup = null, backupFile = null, backupPaused = false;
     const counts = new Map();
     function batchRequestId() {
         const webcrypto = globalThis.crypto;
@@ -90,7 +91,7 @@
             response = await fetch(endpoint.href, {
                 method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error",
                 headers: { "Content-Type": "application/json", "X-CSRF-TOKEN": root.dataset.csrf },
-                body: JSON.stringify(data), signal: AbortSignal.timeout(30000)
+                body: JSON.stringify(data), signal: AbortSignal.timeout(method.startsWith("backup_") ? 120000 : 30000)
             });
         } catch (error) {
             if (error.name === "TimeoutError" || error.name === "AbortError") throw error;
@@ -156,7 +157,8 @@
     }
     async function dashboard() {
         const data = await api("dashboard");
-        $("schema-warning").classList.toggle("d-none", !data.schema_upgrade_required);
+        needUpgrade = data.schema_upgrade_required;
+        $("schema-warning").classList.toggle("d-none", !needUpgrade || !chosenKind);
         $("blockers").replaceChildren(...data.environment.blockers.map(text => element("li", text)));
         selectOptions($("sources"), data.sources.map(row => [row.id, `${row.label} · tested ${row.tested_at} UTC`]), "Select a tested source…");
         selectOptions($("runs"), data.runs.map(row => [row.id, `${row.created_at} UTC · ${row.mode} · ${row.status} · ${row.label}`]), "Select a run…");
@@ -172,6 +174,116 @@
         await api("schema_upgrade", { confirmation: "UPGRADE EXTENSION TABLES" });
         await dashboard(); notice("Extension tracking schema upgraded. No source connection or import ran.");
     }));
+    async function destinationStatus() {
+        const sourceId = source?.source_id || 0, mode = $("mode").value;
+        const status = await api("destination_status", { source_id: sourceId, mode });
+        if ((source?.source_id || 0) !== sourceId || $("mode").value !== mode) return;
+        $("destination-status").className = `alert ${status.ready ? "alert-success" : "alert-warning"}`;
+        $("destination-status").textContent = status.schema_required ? "Install or upgrade the extension tracking tables using the button above before preparing a source." : status.ready
+            ? "Ready: FOSSBilling is fresh or contains only migration-owned records. No destination backup reference is needed."
+            : `Unrelated business records or records from another migration were found in: ${status.unrelated_tables.join(", ")}. Use a fresh FOSSBilling installation or resume the original source. Nothing will be deleted or changed to make it fresh.`;
+    }
+    function showSetup(kind) {
+        chosenKind = kind;
+        $("source-choice").classList.add("d-none");
+        $("navigation").classList.remove("d-none"); $("limits").classList.remove("d-none");
+        $("schema-warning").classList.toggle("d-none", !needUpgrade);
+        $("database-setup").classList.toggle("d-none", kind !== "database");
+        $("upload-setup").classList.toggle("d-none", kind !== "sql_file");
+        step("connection");
+    }
+    for (const [button, kind] of [["choose-database", "database"], ["choose-upload", "sql_file"]]) {
+        $(button).addEventListener("click", handle(async () => {
+            if (preparing || pumping) throw new Error("Wait for preparation or pause processing before changing source type.");
+            if (source && (source.source_kind || "database") !== kind) {
+                source = null; profile = null; counts.clear();
+                $("next").disabled = true; $("upload-next").disabled = true;
+                root.querySelector('[data-step="mapping"]').disabled = true;
+                root.querySelector('[data-step="analysis"]').disabled = true;
+                $("source-status").replaceChildren();
+            }
+            showSetup(kind); await destinationStatus();
+        }));
+    }
+    $("change-source").addEventListener("click", handle(async () => {
+        if (preparing || pumping) throw new Error("Wait for preparation or pause processing before changing source type.");
+        chosenKind = null; $("source-choice").classList.remove("d-none");
+        root.querySelectorAll("[data-panel]").forEach(panel => panel.classList.add("d-none"));
+        $("navigation").classList.add("d-none"); $("limits").classList.add("d-none"); $("schema-warning").classList.add("d-none");
+        $("notice").classList.add("d-none"); $("preparation").classList.add("d-none"); $("top-progress").classList.add("d-none");
+        scrollToTop();
+    }));
+    function uploadProgress(data) {
+        const phase = data.phase;
+        let percent = null, text;
+        if (phase === "upload") { percent = Math.floor(data.uploaded / data.size * 100); text = `Uploading backup · ${percent}%`; }
+        else if (phase === "parse") { percent = data.sql_size > 0 ? Math.min(100, Math.floor(data.parsed / data.sql_size * 100)) : 0; text = `Reading WHMCS tables · ${percent}% · ${data.tables} definitions found`; }
+        else if (phase === "expand") text = `Opening compressed backup · ${Math.floor(data.expanded / 1048576)} MiB prepared`;
+        else if (phase === "verify") text = "Checking compressed backup integrity…";
+        else { percent = 100; text = "Backup is ready. Review the mappings before creating a migration run."; }
+        $("upload-status").textContent = text;
+        $("upload-progress").classList.remove("d-none");
+        $("upload-bar").style.width = `${percent === null ? 100 : percent}%`;
+        $("upload-bar").classList.toggle("wm-working", phase !== "ready" && !backupPaused);
+        if (percent === null) $("upload-progress").removeAttribute("aria-valuenow");
+        else $("upload-progress").setAttribute("aria-valuenow", String(percent));
+        $("upload-progress").setAttribute("aria-valuetext", text);
+    }
+    $("upload").addEventListener("submit", handle(async () => {
+        if (preparing || pumping) throw new Error("Wait for the current migration operation.");
+        preparing = true; backupPaused = false;
+        try {
+            if (!backup) {
+                source = null; profile = null; $("next").disabled = true; $("upload-next").disabled = true;
+                root.querySelector('[data-step="mapping"]').disabled = true; root.querySelector('[data-step="analysis"]').disabled = true;
+                backupFile = $("backup-file").files[0];
+                if (!backupFile) throw new Error("Choose a WHMCS SQL, ZIP or GZIP backup.");
+                const values = Object.fromEntries(new FormData($("upload")));
+                backup = { ...(await api("backup_begin", { ...values, filename: backupFile.name, size: backupFile.size })), phase: "upload", uploaded: 0, size: backupFile.size, expanded: 0 };
+                $("upload-remove").classList.remove("d-none");
+                for (const id of ["backup-file", "upload-prefix", "upload-timezone", "upload-version"]) $(id).disabled = true;
+            }
+            $("upload-pause").classList.remove("d-none");
+            while (!backupPaused && backup.uploaded < backup.size) {
+                const bytes = new Uint8Array(await backupFile.slice(backup.uploaded, backup.uploaded + backup.chunk_size).arrayBuffer());
+                let binary = "";
+                for (let at = 0; at < bytes.length; at += 8192) binary += String.fromCharCode(...bytes.subarray(at, at + 8192));
+                const next = await api("backup_chunk", { backup_id: backup.backup_id, offset: backup.uploaded, data: btoa(binary) });
+                backup = { ...backup, ...next }; uploadProgress(backup);
+            }
+            while (!backupPaused && backup.phase !== "ready") {
+                backup = { ...backup, ...(await api("backup_prepare", { backup_id: backup.backup_id })) };
+                uploadProgress(backup);
+            }
+            if (!backupPaused) {
+                useSource(await api("backup_source", { backup_id: backup.backup_id }));
+                $("upload-next").disabled = false;
+                await destinationStatus();
+                await dashboard();
+                notice("Backup prepared privately. No SQL was executed and no client records were imported. Review the mappings next.");
+            } else $("upload-status").append(" · Paused. Keep this page open and choose Continue upload to resume.");
+        } finally {
+            preparing = false;
+            $("upload-bar").classList.remove("wm-working");
+            $("upload-pause").classList.add("d-none");
+            $("upload-start").textContent = backup?.phase === "ready" ? "Backup prepared" : backup ? "Continue upload" : "Upload & prepare backup";
+        }
+    }));
+    $("upload-pause").addEventListener("click", () => { backupPaused = true; });
+    $("upload-remove").addEventListener("click", handle(async () => {
+        if (preparing || !backup) throw new Error("Pause upload or preparation before removing the backup.");
+        if (!window.confirm("Remove this private uploaded backup and its prepared files? Archived/imported records are not deleted. Unfinished runs that need this file will block removal.")) return;
+        await api("backup_remove", { backup_id: backup.backup_id, confirmation: "REMOVE PRIVATE BACKUP" });
+        if (source?.backup_id === backup.backup_id) {
+            source = null; profile = null; counts.clear(); $("upload-next").disabled = true; $("next").disabled = true;
+            root.querySelector('[data-step="mapping"]').disabled = true; root.querySelector('[data-step="analysis"]').disabled = true;
+        }
+        backup = null; backupFile = null;
+        for (const id of ["backup-file", "upload-prefix", "upload-timezone", "upload-version"]) $(id).disabled = false;
+        $("upload-remove").classList.add("d-none"); $("upload-status").textContent = "Private backup removed.";
+        $("upload-progress").classList.add("d-none"); $("upload-start").textContent = "Upload & prepare backup";
+    }));
+    $("upload-next").addEventListener("click", () => step("mapping"));
     let publicIp = "";
     $("ip-lookup").addEventListener("click", handle(async () => {
         // Do not retain a stale address if a refresh fails after a route/VPN change.
@@ -223,7 +335,15 @@
         const connection = data.connection_status;
         const modeNames = { verified_tls: "Verified TLS", unverified_tls: "TLS without certificate verification", standard: "Standard MySQL (no TLS requested)" };
         const connected = Boolean(connection?.successful);
-        $("source-status").replaceChildren(element("h4", connected ? "Connection successful" : "Previously tested source — retest for current connection diagnostics", connected ? "wm-success" : ""), element("p", `SELECT-only grants checked · ${data.label} · WHMCS ${data.version || "manually confirmed 8.x"} · Last tested ${data.tested_at || "unknown"} UTC`));
+        const fileSource = data.source_kind === "sql_file";
+        const available = data.source_available !== false;
+        if (fileSource && available) {
+            $("upload-timezone").value = data.source_timezone || "America/Chicago";
+            if (data.backup_id && backup?.backup_id !== data.backup_id) backup = { backup_id: data.backup_id, phase: "ready", uploaded: 0, size: 0 };
+            $("upload-remove").classList.remove("d-none");
+        }
+        showSetup(fileSource ? "sql_file" : "database");
+        $("source-status").replaceChildren(element("h4", fileSource ? available ? "Backup ready" : "Backup files were removed — upload a new backup to migrate again" : connected ? "Connection successful" : "Previously tested source — retest for current connection diagnostics", connected || (fileSource && available) ? "wm-success" : ""), element("p", `${fileSource ? "Private SQL backup · data only" : "SELECT-only grants checked"} · ${data.label} · WHMCS ${data.version || "manually confirmed 8.x"} · Last tested ${data.tested_at || "unknown"} UTC`));
         if (connection) $("source-status").append(dataTable(["Property", "Result"], [
             ["Selected security", modeNames[connection.security_mode] || connection.security_mode],
             ["TLS encryption active", connection.tls_active ? "Yes" : "No — unencrypted connection"],
@@ -236,9 +356,10 @@
             ["WHMCS server timezone", data.source_timezone || "Not selected"]
         ]));
         $("timezone").value = data.source_timezone || "America/Chicago";
-        $("next").disabled = false;
-        root.querySelector('[data-step="mapping"]').disabled = false;
-        root.querySelector('[data-step="analysis"]').disabled = false;
+        $("next").disabled = !available;
+        $("upload-next").disabled = !fileSource || !available;
+        root.querySelector('[data-step="mapping"]').disabled = !available;
+        root.querySelector('[data-step="analysis"]').disabled = !available;
         renderFields();
         renderTables();
     }
@@ -252,6 +373,7 @@
         try {
             const result = await api("test_connection", values);
             useSource(result);
+            await destinationStatus();
             await dashboard();
             notice("Connection verified. Review every mapping and excluded table before proceeding.");
         } finally {
@@ -263,7 +385,7 @@
         }
     }));
     $("sources").addEventListener("change", handle(async () => {
-        if ($("sources").value) useSource(await api("mapping_get", { source_id: Number($("sources").value) }));
+        if ($("sources").value) { useSource(await api("mapping_get", { source_id: Number($("sources").value) })); await destinationStatus(); }
     }));
     $("next").addEventListener("click", () => step("mapping"));
     function dropdown(options, value, label) {
@@ -416,7 +538,7 @@
         $("mode-description").textContent = descriptions[$("mode").value];
         $("historical-mode-note").classList.toggle("d-none", $("mode").value !== "historical_native");
     }
-    $("mode").addEventListener("change", describeMode);
+    $("mode").addEventListener("change", handle(async () => { describeMode(); if (source) await destinationStatus(); }));
     describeMode();
     async function analyzeTables(tables, sourceId) {
         preparation(`Analyzing tables · 0 of ${tables.length} finished`, 0, tables.length);
@@ -532,7 +654,7 @@
     $("authorize").addEventListener("invalid", event => {
         event.preventDefault();
         if (preparing) return;
-        const explain = () => notice("Complete the required authorization fields: backup reference, backup and limitations confirmations, and the PRESERVE HISTORY phrase. No run was created.", true);
+        const explain = () => notice("Complete the required authorization fields: acknowledge the limitations and type PRESERVE HISTORY. No run was created.", true);
         scrollToTop();
         if (!source || replacement) { explain(); return; }
         // Opening saved work needs no new backup/authorization form. Missing
@@ -556,9 +678,9 @@
         if (source?.source_id !== pending.sourceId || run?.id !== pending.runId) throw new Error("The source or run changed. Review your selections again.");
         if (!$("authorize").checkValidity()) { step("analysis"); $("authorize").reportValidity(); return; }
         const data = Object.fromEntries(new FormData($("authorize")));
-        if (data.confirmation !== "PRESERVE HISTORY" || !data.backup_reference?.trim() || !data.backup_verified || !data.accept_limitations || (data.mode === "historical_native" && !data.destination_exclusive)) {
+        if (data.confirmation !== "PRESERVE HISTORY" || !data.accept_limitations || (data.mode === "historical_native" && !data.destination_exclusive)) {
             step("analysis");
-            throw new Error("Review your backup reference, type PRESERVE HISTORY exactly, and confirm the required safety checkboxes before cancelling existing work. Historical financial mode also requires the private, idle destination confirmation.");
+            throw new Error("Type PRESERVE HISTORY exactly and confirm the required safety checkboxes before cancelling existing work. Historical financial mode also requires the private, idle destination confirmation.");
         }
         const snapshot = JSON.stringify({ data, tables: selectedTables(), profile });
         if (!window.confirm("Cancel future batches for this existing run and create a new paused run using your current reviewed choices? Already imported records and history will remain. Nothing will be deleted or rolled back.")) return;

@@ -154,6 +154,37 @@ API is verified to return `Authentication Failed`/201 before source access.
 - Scrolling is now smooth for the document and nested admin scroll containers.
   Reduced-motion preferences disable smooth scrolling, stripes and transitions.
 
+## Two source choices and data-only SQL backups
+
+- The first screen contains only **Connect to WHMCS database** and **Upload WHMCS
+  backup**. Relevant fields appear after selection; both paths share mappings,
+  previews, authorization and the existing safe native/archive adapters.
+- Accepts one large SQL, SQL.GZ/GZ or standard ZIP/ZIP64 containing one SQL file.
+  Users never split files. Internal authenticated blocks provide in-page pause/
+  continue and idempotent upload retries, with upload/prepare progress.
+- SQL is tokenized as data, never executed. No staging database, shell command,
+  Composer dependency or core-schema modification is used. Encrypted seekable
+  row files feed the existing resumable engine, including native client imports.
+- Backups/checkpoints are authenticated and encrypted at rest. Ownership, path/
+  ZIP traversal, CRC, size, ordering and syntax checks fail closed. Source identity
+  is frozen into the plan; required source files cannot be removed during an
+  unfinished run. Explicit cleanup retains imported/archive evidence.
+- Fresh-install/ownership checks replace mandatory destination backup fields.
+  Unrelated business records block authorization without deletion or alteration.
+  Existing same-source migration-owned records can be resumed. Idle/private
+  historical-finance confirmation and all native safety restrictions remain.
+- SQL import supports a conservative UTF-8 CREATE/INSERT subset with increasing
+  positive integer keys, not arbitrary SQL engines or every provider's dump
+  syntax. Limits are 64 GiB upload / 128 GiB expansion, subject to disk/server
+  resources; real multi-gigabyte upload/throughput is not yet established.
+
+Read [SQL backup requirements](SQL-BACKUPS.md). Keep the page open for unfinished
+uploads and preserve `.local/backups/`, its installation path and the installation
+secret during upgrades. Prepared sources/runs persist; in-progress upload tokens
+are intentionally not stored in browser storage. File processing remains browser-
+scheduled; compression replays to checkpoints and no speedup is promised without
+benchmarking. No live import or authenticated real-admin upload was tested.
+
 ## Upgrade / important limits
 
 Remove the old `modules/Whmcsmigrator/` directory and install this asset as

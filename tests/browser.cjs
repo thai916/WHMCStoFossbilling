@@ -63,6 +63,8 @@ const historicalRun = {
 const requests = [];
 const testedModes = [];
 const batchRequestIds = [];
+let uploadedBytes = 0, uploadTotal = 0, backupPreparations = 0;
+let backupChunkGate = null;
 const server = http.createServer((request, response) => {
     const item = content[request.url];
     if (!item) { response.writeHead(404); response.end(); return; }
@@ -87,6 +89,18 @@ const server = http.createServer((request, response) => {
             assert.equal(request.headers()["x-csrf-token"], "test-session-csrf");
             let result;
             switch (method) {
+                case "destination_status": result = { ready: true, unrelated_tables: [] }; break;
+                case "backup_begin": uploadTotal = data.size; uploadedBytes = 0; result = { backup_id: "d".repeat(32), chunk_size: 262144 }; break;
+                case "backup_chunk":
+                    if (backupChunkGate) { const pending = backupChunkGate; backupChunkGate = null; await pending; }
+                    assert.equal(data.offset, uploadedBytes);
+                    uploadedBytes += Buffer.from(data.data, "base64").length;
+                    result = { backup_id: "d".repeat(32), phase: "upload", uploaded: uploadedBytes, size: uploadTotal, expanded: 0, parsed: 0, sql_size: 0, tables: 0 }; break;
+                case "backup_prepare":
+                    ++backupPreparations;
+                    result = { backup_id: "d".repeat(32), phase: backupPreparations === 1 ? "expand" : backupPreparations === 2 ? "parse" : "ready", uploaded: uploadedBytes, size: uploadTotal, expanded: uploadTotal, parsed: uploadTotal, sql_size: uploadTotal, tables: 43 }; break;
+                case "backup_source": result = { ...source, source_kind: "sql_file", backup_id: "d".repeat(32), connection_status: null, label: "Uploaded WHMCS SQL backup" }; break;
+                case "backup_remove": assert.equal(data.confirmation, "REMOVE PRIVATE BACKUP"); result = { removed: true }; break;
                 case "dashboard": result = { schema_upgrade_required: schemaUpgradeRequired, environment: { blockers: source.blockers }, sources: [{ id: 1, label: source.label, tested_at: "2026-01-01" }], runs: [{ id: historicalRunId, created_at: "2026-01-01", mode: "historical_native", status: "requires_action", label: "synthetic history" }] }; break;
                 case "schema_upgrade":
                     assert.equal(data.confirmation, "UPGRADE EXTENSION TABLES");
@@ -192,6 +206,15 @@ const server = http.createServer((request, response) => {
         });
         await page.goto(`http://127.0.0.1:${port}/`);
         await page.waitForLoadState("networkidle");
+        assert.equal(await page.locator(".wm-source-option:visible").count(), 2, "First page offers only two source choices");
+        assert.equal(await page.locator("#wm-connection").isVisible(), false, "Connection fields stay hidden until selected");
+        assert.equal(await page.locator("#wm-upload").isVisible(), false, "Upload fields stay hidden until selected");
+        await page.screenshot({ path: path.join(artifacts, "source-choice.png"), fullPage: true });
+        await page.setViewportSize({ width: 390, height: 844 });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Two source choices fit on mobile");
+        await page.screenshot({ path: path.join(artifacts, "source-choice-mobile.png"), fullPage: true });
+        await page.setViewportSize({ width: 1365, height: 1000 });
+        await page.locator("#wm-choose-database").click();
         assert.equal(await page.locator("#wm-next").isDisabled(), true);
         assert.equal(requests.includes("test_connection"), false, "No connection runs on page load");
         assert.equal(requests.includes("public_ip"), false, "No external IP lookup runs on page load");
@@ -356,8 +379,6 @@ const server = http.createServer((request, response) => {
         await waitTop();
         assert.equal(await page.evaluate(() => window.scrollY), 0, "Missing authorization fields scroll to the error without submitting");
         assert.equal(requests.filter(name => name === "run_create").length, createsBeforeInvalid);
-        await page.locator("#wm-backup").fill("Synthetic browser fixture — not a real authorization");
-        await page.locator('[name="backup_verified"]').check();
         await page.locator('[name="accept_limitations"]').check();
         await page.locator("#wm-confirm").fill("PRESERVE HISTORY");
         const batchesBeforeAuthorization = requests.filter(name => name === "run_batch").length;
@@ -446,7 +467,7 @@ const server = http.createServer((request, response) => {
         const beforeExisting = requests.length;
         syntheticExisting = { run: currentRun, differences: ["execution mode", "invalid-date policy"] };
         await page.locator('[data-step="analysis"]').click();
-        await page.locator("#wm-backup").fill("");
+        await page.locator('[name="accept_limitations"]').uncheck();
         await authorize.click();
         await page.locator("#wm-existing-run").waitFor({ state: "visible" });
         await waitTop();
@@ -458,9 +479,9 @@ const server = http.createServer((request, response) => {
         assert.equal(requests.slice(beforeExisting).includes("run_create"), false, "Existing run is reused without creating a duplicate");
         assert.equal(requests.slice(beforeExisting).includes("run_control"), false, "Existing run is not resumed or cancelled automatically");
         await page.screenshot({ path: path.join(artifacts, "existing-run.png"), fullPage: true });
-        assert.equal(await page.locator("#wm-backup").inputValue(), "", "Opening saved work does not require a new backup authorization");
+        assert.equal(await page.locator("#wm-backup").count(), 0, "A fresh-install migration does not request a destination backup reference");
         await page.locator('[data-step="analysis"]').click();
-        await page.locator("#wm-backup").fill("Synthetic browser fixture — not a real authorization");
+        await page.locator('[name="accept_limitations"]').check();
         await page.locator('[data-step="progress"]').click();
         const controlsBeforeDecline = requests.filter(name => name === "run_control").length;
         page.once("dialog", dialog => dialog.dismiss());
@@ -507,12 +528,43 @@ const server = http.createServer((request, response) => {
         assert.match(await page.locator("#wm-credit-results").innerText(), /Closing balance mismatch/);
         assert.equal(await page.evaluate(() => window.XSS_EXECUTED), undefined, "Financial diagnostics never execute HTML");
         await page.locator('[data-step="connection"]').click();
+        await page.locator("#wm-change-source").click();
+        await page.locator("#wm-choose-upload").click();
+        assert.equal(await page.locator("#wm-connection").isVisible(), false, "SQL mode does not ask for database credentials");
+        const connectionsBeforeUpload = requests.filter(name => name === "test_connection").length;
+        await page.locator("#wm-backup-file").setInputFiles({ name: "synthetic-history.sql.gz", mimeType: "application/gzip", buffer: Buffer.alloc(700000, 65) });
+        let releaseUpload;
+        backupChunkGate = new Promise(resolve => { releaseUpload = resolve; });
+        await page.locator("#wm-upload-start").click();
+        await page.locator("#wm-upload-pause").waitFor({ state: "visible" });
+        await page.locator("#wm-upload-pause").click();
+        releaseUpload();
+        await page.getByRole("button", { name: "Continue upload", exact: true }).waitFor();
+        assert.ok(uploadedBytes > 0 && uploadedBytes < 700000, "Pausing preserves the completed block without splitting files manually");
+        await page.locator("#wm-upload-start").click();
+        await page.waitForFunction(() => !document.getElementById("wm-upload-next").disabled);
+        assert.equal(uploadedBytes, 700000, "One selected large file is transmitted intact through internal bounded requests");
+        assert.equal(requests.filter(name => name === "test_connection").length, connectionsBeforeUpload, "SQL upload never opens a WHMCS database connection");
+        assert.match(await page.locator("#wm-source-status").innerText(), /Backup ready/);
+        await page.screenshot({ path: path.join(artifacts, "sql-upload-ready.png"), fullPage: true });
+        await page.setViewportSize({ width: 390, height: 844 });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "SQL upload fields fit mobile without horizontal overflow");
+        await page.screenshot({ path: path.join(artifacts, "sql-upload-mobile.png"), fullPage: true });
+        await page.setViewportSize({ width: 1365, height: 1000 });
+        await page.locator("#wm-upload-next").click();
+        assert.equal(await page.locator("#wm-fields").isVisible(), true, "SQL and database sources share the mapping workflow");
+        await page.locator('[data-step="connection"]').click();
+        page.once("dialog", dialog => dialog.accept());
+        await page.locator("#wm-upload-remove").click();
+        await page.getByText("Private backup removed.", { exact: true }).waitFor();
+        await page.locator("#wm-change-source").click();
+        await page.locator("#wm-choose-database").click();
         await page.screenshot({ path: path.join(artifacts, "desktop.png"), fullPage: true });
         await page.setViewportSize({ width: 390, height: 844 });
         await page.screenshot({ path: path.join(artifacts, "mobile.png"), fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile connection page has no horizontal overflow");
         assert.deepEqual(errors, [], "No browser JavaScript errors");
-        console.log("PASS: synthetic browser wizard, honest animated preparation percentages, smooth/reduced-motion scrolling, automatic paused/running existing-run discovery without new authorization or duplicate batches, read-only status observation, saved-settings differences, explicit replacement confirmation and creation-race recovery; connection/session controls, responsive 3/2/1-column review, safe search, preview/native summaries, idempotency, legacy search, financial displays, XSS protection and no browser storage");
+        console.log("PASS: two-choice source landing; database fields and SQL/GZIP/ZIP upload workflow shown only after selection; single-file upload/pause/continue/progress/cleanup and shared mapping; fresh-install flow without backup-reference fields; responsive desktop/mobile source and review layouts; existing-run recovery, honest progress, session controls, idempotency, privacy and no browser storage");
         const livePage = await browser.newPage();
         await livePage.goto("http://fossbill.test/admin/whmcstofossbilling");
         await livePage.waitForLoadState("networkidle");
@@ -523,6 +575,8 @@ const server = http.createServer((request, response) => {
         assert.equal(Number(denied.error?.code), 201);
         assert.equal(denied.error?.message, "Authentication Failed");
         console.log("PASS: actual unauthenticated local analysis API returns Authentication Failed/code 201 before source access; no login or import performed");
+        const uploadDenied = await livePage.request.post("http://fossbill.test/api/admin/whmcstofossbilling/backup_begin", { data: { filename: "synthetic.sql", size: 100 } });
+        assert.equal(Number((await uploadDenied.json()).error?.code), 201, "Real anonymous callers cannot create private backup jobs");
     } finally {
         await browser.close();
         server.close();

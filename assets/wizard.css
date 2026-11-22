@@ -27,6 +27,14 @@
 #whmcstofossbilling pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:36rem;overflow:auto}
 #whmcstofossbilling :focus-visible{outline:2px solid #206bc4;outline-offset:3px}
 #whmcstofossbilling .wm-success{color:#0b5d2a!important;font-weight:700}
+#whmcstofossbilling .wm-source-choice{max-width:65rem;margin:3rem auto}
+#whmcstofossbilling .wm-source-options{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-top:1.5rem}
+#whmcstofossbilling .wm-source-option{display:flex;flex-direction:column;gap:1rem;text-align:left;padding:2rem;border:1px solid var(--tblr-border-color);border-radius:10px;background:var(--tblr-bg-surface);color:inherit;transition:border-color .15s,box-shadow .15s}
+#whmcstofossbilling .wm-source-option:hover{border-color:#206bc4;box-shadow:0 4px 16px rgba(32,107,196,.1)}
+#whmcstofossbilling .wm-source-option strong{font-size:1.3rem}
+#whmcstofossbilling .wm-source-option small{color:var(--tblr-secondary);margin-top:auto}
+#whmcstofossbilling .wm-source-symbol{font:2rem Consolas,monospace;color:#206bc4}
+@media(max-width:640px){#whmcstofossbilling .wm-source-options{grid-template-columns:1fr}#whmcstofossbilling .wm-source-choice{margin:1rem auto}#whmcstofossbilling .wm-source-option{padding:1.25rem}}
 #whmcstofossbilling{--wm-ink:#243447;--wm-blue:#206bc4;--wm-wash:#eef4fb;--wm-paper:#fff;--wm-green:#0b5d2a;--wm-amber:#946200}
 #whmcstofossbilling h2,#whmcstofossbilling h3,#whmcstofossbilling h4{font-family:Bahnschrift,"Segoe UI",sans-serif;letter-spacing:-.02em}
 #whmcstofossbilling .card-header{justify-content:space-between;gap:1rem;flex-wrap:wrap}

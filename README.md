@@ -24,7 +24,8 @@ This extension is **vibe coded**. It requires independent security review and di
 - Per-table preflight counts in separate requests.
 - Editable client text-field mappings, archive/skip dispositions, mapping validation and JSON profiles.
 - Batched dry run with an explicit archive/reference/historical target: source scan, client conflict checks and supported-adapter value/eligibility validation. **Not a simulation of every insertion, aggregate or financial relationship.**
-- Explicit backup confirmation and authorization before non-preview runs.
+- Fresh-install/ownership checks and explicit authorization before non-preview runs; no mandatory destination backup reference.
+- Two source choices: existing SELECT-only database connection, or private streamed SQL/GZIP/ZIP upload with no SQL execution or staging database.
 - Durable per-record checkpoints, source-level database advisory locks, committed-request replay, pause/resume/cancel, bounded failed-record retry.
 - Cross-run identity mappings and unchanged-record skipping. Changed native records are **not** automatically updated.
 - Structured administrator-only archives, indexed relationships, original dates, disclosed exclusions/redactions and prior revisions. Per-run extracted snapshots cannot be replaced by a later run's latest archive.
@@ -40,9 +41,9 @@ This extension is **vibe coded**. It requires independent security review and di
 
 ## Installation
 
-1. Back up the destination database and verify restoration.
+1. Use a fresh FOSSBilling installation with no unrelated business records. Previously imported records from the same migration can be resumed.
 2. Place this directory at `modules/Whmcstofossbilling/` — exact capitalization matters on Linux.
-3. Use the PHP runtime serving FOSSBilling, **PHP 8.3+**, with PDO MySQL, OpenSSL, BCMath, Mbstring and JSON.
+3. Use the PHP runtime serving FOSSBilling, **PHP 8.3+**, with PDO MySQL, OpenSSL, BCMath, Mbstring and JSON. Backup uploads require 64-bit PHP; compressed backups also require zlib. ZipArchive is not required.
 4. Log in at your FOSSBilling admin URL.
 5. In **Extensions → Overview**, activate **WHMCStoFossbilling**.
 6. Open **Extensions → WHMCStoFossbilling**.
@@ -61,9 +62,29 @@ Adjust the scheme/admin prefix for your deployment. Activation creates only exte
 
 No Composer update, Docker, external queue or cron is required. The existing application naturally writes runtime cache/session/log data. The extension itself does not edit core files.
 
-Apache direct requests to the module directory are denied by its own `.htaccess`, **except the non-sensitive `icon.png` used by the extensions list**; wizard assets are served by the authenticated controller. On Nginx, have the server administrator allow only `/modules/Whmcstofossbilling/icon.png` and deny other direct module requests before deployment. This extension does not edit server configuration. Never deploy `.local/` development artifacts.
+Apache direct requests to the module directory are denied by its own `.htaccess`, **except the non-sensitive `icon.png` used by the extensions list**; wizard assets are served by the authenticated controller. On Nginx, have the server administrator allow only `/modules/Whmcstofossbilling/icon.png` and deny other direct module requests before deployment. This extension does not edit server configuration. Do not ship development artifacts from `.local/`. Runtime uploads are created encrypted under `.local/backups/`; preserve that directory and the installation secret during upgrades while backups are still needed.
+
+## Choose your source
+
+The first screen shows only **Connect to WHMCS database** and **Upload WHMCS backup**.
+Selecting one reveals its fields. Neither choice connects or imports automatically.
+Both feed the same mapping, preview, authorization, archive and native adapters.
+
+For a file, select one `.sql`, `.sql.gz`/`.gz`, or `.zip` containing one SQL member.
+Choose the actual WHMCS application timezone and click **Upload & prepare backup**.
+You never split the file yourself. Internal authenticated blocks keep uploads below
+ordinary PHP single-file upload limits; pause/continue works while the page remains
+open. Upload tokens are not stored in browser storage, so a reload during an
+unfinished upload requires a new upload. Prepared sources are saved normally.
+
+Files are encrypted at rest. The bounded parser reads UTF-8 table definitions and
+plain INSERT VALUES tuples, builds encrypted seekable files and never executes
+uploaded SQL. There is no staging database. See [SQL backup requirements and limits](docs/SQL-BACKUPS.md).
 
 ## Safe usage
+
+Steps 1–5 below describe the database choice; the upload choice replaces them with
+the file preparation above. The subsequent mapping and migration steps are shared.
 
 1. Have your DBA create a dedicated account with **SELECT on the WHMCS database only**. Do not provide a root or normal WHMCS application account.
 2. Allowlist the destination's actual public outbound/NAT IP on the database firewall. **Show public IP** performs an explicit HTTPS request from the FOSSBilling server to `api.ipify.org`; no database credentials/customer data are sent. **Copy IP** and **Refresh public IP** are available after lookup. PHP cURL is required for this optional feature. Verify MySQL uses the same outbound route, especially with VPNs/proxies.
@@ -72,7 +93,7 @@ Apache direct requests to the module directory are denied by its own `.htaccess`
 5. Select the **WHMCS server timezone** in the dropdown before testing. It defaults to **America/Chicago**; confirm it matches the WHMCS/PHP application timezone, including any historical timezone changes. No MySQL timezone or offset is inspected or inferred. Selecting an empty value leaves the source Unverified and blocks timezone-sensitive native records; use archive mode for event history. Version defaults to **Auto-detect**; a manually verified 8.x fallback never overrides an incompatible detected version. Native event adapters currently require a UTC-configured destination; the extension never changes global timezone settings.
 6. Save mappings, analyze selected tables, choose the intended execution mode and create its dry run.
 7. Explicitly resume the paused preview. Review all exceptions.
-8. If the supported scope is appropriate, authorize the run with a verified backup and `PRESERVE HISTORY`. Historical financial mode additionally requires confirmation that the destination is private and otherwise idle.
+8. If the supported scope is appropriate, acknowledge the limitations and type `PRESERVE HISTORY`. The destination must be fresh or contain appropriate migration-owned records; unrelated data is never deleted to make it fresh. Historical financial mode additionally requires confirmation that the destination is private and otherwise idle.
 9. Explicitly resume. Extraction, credit publication and financial assessment all checkpoint across requests. Browser closure stops new scheduling; reopen, select the persisted run and resume.
 10. Inspect archives, credit results and financial exceptions, then export reports. Never describe archive-only records as native imports or snapshot totals as final cutover reconciliation.
 

@@ -48,7 +48,7 @@ $denied = static function (callable $operation, string $label): void {
         expect(true, $label);
     }
 };
-foreach (['dashboard', 'schema_upgrade', 'public_ip', 'test_connection', 'timezone_confirm', 'mapping_get', 'mapping_save', 'analysis_prepare', 'analyze_table', 'run_create', 'run_existing', 'run_status', 'run_control', 'run_batch', 'run_retry', 'archive_search', 'report_export'] as $endpoint) {
+foreach (['dashboard', 'schema_upgrade', 'public_ip', 'test_connection', 'destination_status', 'backup_begin', 'backup_chunk', 'backup_prepare', 'backup_source', 'backup_remove', 'timezone_confirm', 'mapping_get', 'mapping_save', 'analysis_prepare', 'analyze_table', 'run_create', 'run_existing', 'run_status', 'run_control', 'run_batch', 'run_retry', 'archive_search', 'report_export'] as $endpoint) {
     $request = Request::create(SYSTEM_URL . 'api/admin/whmcstofossbilling/' . $endpoint, 'POST');
     $denied(fn () => $newApi($request)->{$endpoint}([]), $endpoint . ' rejects missing CSRF before service execution');
 }
@@ -64,6 +64,7 @@ $staff->allow = false;
 $denied(fn () => $newApi($request)->dashboard([]), 'Explicit endpoint permission denial respected');
 $staff->allow = true;
 $staff->deniedPermissions = ['configure'];
+foreach (['backup_begin', 'backup_chunk', 'backup_prepare', 'backup_source', 'backup_remove'] as $endpoint) $denied(fn () => $newApi($request)->{$endpoint}([]), $endpoint . ' retains configure permission');
 $denied(fn () => $newApi($request)->analysis_prepare([]), 'Execute permission alone cannot prepare automatic analysis');
 $denied(fn () => $newApi($request)->analyze_table([]), 'Automatic refresh retains configure permission on each table request');
 $staff->deniedPermissions = [];

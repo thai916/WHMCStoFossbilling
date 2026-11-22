@@ -67,8 +67,8 @@ final class Engine
             }
             $source = $this->store->source((int) $run['source_id']);
             $options = $this->vault->open($source['credentials']);
-            \Box\Mod\Whmcstofossbilling\Source\ConnectionOptions::assertPlan($options, $plan);
-            $reader = new Reader($options);
+            \Box\Mod\Whmcstofossbilling\Source\ReaderFactory::assertPlan($options, $plan);
+            $reader = \Box\Mod\Whmcstofossbilling\Source\ReaderFactory::open($options);
             if (Store::json($reader->inspect()) !== Store::json($schema)) {
                 throw new SafeException('Source schema changed after preflight. Stop and review a new plan.');
             }
@@ -163,8 +163,8 @@ final class Engine
             }
             $source = $this->store->source((int) $run['source_id']);
             $options = $this->vault->open($source['credentials']);
-            \Box\Mod\Whmcstofossbilling\Source\ConnectionOptions::assertPlan($options, json_decode($run['plan_json'], true, 128, JSON_THROW_ON_ERROR));
-            $reader = new Reader($options);
+            \Box\Mod\Whmcstofossbilling\Source\ReaderFactory::assertPlan($options, json_decode($run['plan_json'], true, 128, JSON_THROW_ON_ERROR));
+            $reader = \Box\Mod\Whmcstofossbilling\Source\ReaderFactory::open($options);
             $schema = json_decode($run['schema_json'], true, 128, JSON_THROW_ON_ERROR);
             if (Store::json($reader->inspect()) !== $run['schema_json']) {
                 throw new SafeException('Source schema changed; retries are blocked pending a new plan.');

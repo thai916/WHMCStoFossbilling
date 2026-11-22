@@ -43,6 +43,8 @@ $destinationDb = 'wm_test_destination_' . $token;
 $user = 'wm_test_' . $token;
 $password = bin2hex(random_bytes(24));
 $service = null;
+$dumpJobId = null;
+$sqlDestinationDb = null;
 
 try {
     foreach ([$sourceDb, $destinationDb] as $name) {
@@ -534,12 +536,84 @@ try {
     expect($largeStatus['status'] === 'requires_action' && (int) $largeStatus['categories'][0]['processed'] === 22 && (int) $largeStatus['categories'][0]['failed'] === 1, 'Actual resumable engine processes every byte-limited record and reports the oversized record as failed');
     expect((int) $store->one("SELECT COUNT(*) AS n FROM whmcstofossbilling_snapshot WHERE run_id=? AND table_name='tblnotes'", [$largeRun['id']])['n'] === 21, 'Oversized record is not archived as fabricated null data; all other records are preserved');
     expect($sourceDigest() === $beforeLargeRead, 'Large-record migration leaves the synthetic source unchanged');
+    expect($service->destinationStatus()['ready'], 'A destination containing only migration-owned business rows remains resumable without a backup reference');
+    $store->pdo->beginTransaction();
+    try {
+        $store->execute("DELETE FROM whmcstofossbilling_identity WHERE destination_entity='client' AND source_id=?", [$profile['source_id']]);
+        expect(!$service->destinationStatus()['ready'], 'Unrelated/untracked clients block the fresh-install workflow');
+        rejects(fn () => \Box\Mod\Whmcstofossbilling\Destination\FreshCheck::assertReady($store), 'Fresh-install guard fails closed without deleting or changing business data');
+    } finally { $store->pdo->rollBack(); }
+    // Export only SYNTHETIC fixture rows, then consume the dump without executing it.
+    $dump = "SET NAMES utf8mb4;\n";
+    foreach (['tblclients', 'tblproducts', 'tblhosting', 'tblinvoices', 'tblinvoiceitems', 'tblaccounts', 'tblconfiguration', 'tblcurrencies', 'tblclientgroups'] as $name) {
+        $definition = $admin->query("SHOW CREATE TABLE `$sourceDb`.`$name`")->fetch();
+        $dump .= $definition['Create Table'] . ";\n";
+        foreach ($admin->query("SELECT * FROM `$sourceDb`.`$name` ORDER BY id") as $record) {
+            $dump .= "INSERT INTO `$name` VALUES (" . implode(',', array_map(static fn ($value) => $value === null ? 'NULL' : $admin->quote((string) $value), array_values($record))) . ");\n";
+        }
+    }
+    $upload = $service->backup('begin', ['filename' => 'synthetic.sql', 'size' => strlen($dump), 'source_timezone' => 'UTC'], 1);
+    $dumpJobId = $upload['backup_id'];
+    for ($offset = 0; $offset < strlen($dump); $offset += $upload['chunk_size']) $service->backup('chunk', ['backup_id' => $dumpJobId, 'offset' => $offset, 'data' => base64_encode(substr($dump, $offset, $upload['chunk_size']))], 1);
+    do { $preparedDump = $service->backup('prepare', ['backup_id' => $dumpJobId], 1); } while ($preparedDump['phase'] !== 'ready');
+    $dumpSource = $service->backup('source', ['backup_id' => $dumpJobId], 1);
+    expect($dumpSource['source_kind'] === 'sql_file' && $dumpSource['version'] === '8.10.1' && !str_contains(Store::json($dumpSource), $password), 'SQL source profile uses the shared mapper and returns no source password or private file path');
+    $dumpTables = [];
+    foreach ($dumpSource['schema'] as $name => $definition) if ($definition['classification'] === 'archive') { $service->analyze($dumpSource['source_id'], $name); $dumpTables[] = $name; }
+    $dumpInput = ['source_id' => $dumpSource['source_id'], 'tables' => $dumpTables, 'mode' => 'archive', 'confirmation' => 'PRESERVE HISTORY', 'accept_limitations' => true];
+    $dumpRun = $service->createRun($dumpInput, 1);
+    expect($dumpRun['plan']['source_security_mode'] === 'sql_file' && $dumpRun['plan']['source_backup_id'] === $dumpJobId, 'SQL run freezes the private backup identity without a MySQL connection or backup-reference requirement');
+    rejects(fn () => $service->backup('remove', ['backup_id' => $dumpJobId, 'confirmation' => 'REMOVE PRIVATE BACKUP'], 1), 'Private SQL files required by unfinished runs cannot be removed');
+    $service->control($dumpRun['id'], 'resume');
+    $dumpBatches = 0;
+    do {
+        $request = bin2hex(random_bytes(16));
+        $dumpResult = $service->batch($dumpRun['id'], $request, 50);
+        if (++$dumpBatches > 200) throw new RuntimeException('Unbounded SQL fixture engine');
+    } while ($dumpResult['status'] === 'running');
+    $dumpClient = $store->one("SELECT payload FROM whmcstofossbilling_archive WHERE source_id=? AND table_name='tblclients' AND source_key='1'", [$dumpSource['source_id']]);
+    expect(json_decode($dumpClient['payload'], true)['firstname'] === 'Changed fixture name', 'Actual migration engine archives rows read from an encrypted SQL file');
+    expect((int) $store->one('SELECT COUNT(*) AS n FROM client')['n'] === 3 && $sourceDigest() === $beforeLargeRead, 'SQL archival neither creates native clients nor changes the original source');
+    rejects(fn () => $service->createRun(array_replace($dumpInput, ['mode' => 'reference_native']), 1), 'A different SQL source cannot duplicate native records from an existing migration');
+    // A second independently named disposable destination proves native SQL-file
+    // imports into a fresh installation without erasing any first-fixture history.
+    $sqlDestinationDb = 'wm_test_destination_' . bin2hex(random_bytes(5));
+    $admin->exec("CREATE DATABASE `$sqlDestinationDb` CHARACTER SET utf8mb4");
+    $admin->exec("USE `$sqlDestinationDb`");
+    foreach ($required as $table) {
+        $definition = $admin->query('SHOW CREATE TABLE `' . $db['name'] . '`.`' . $table . '`')->fetch();
+        $admin->exec($definition['Create Table']);
+    }
+    $admin->exec("INSERT INTO currency (code,is_default,conversion_rate) VALUES ('USD',1,1.000000)");
+    $sqlPdo = new PDO('mysql:host=' . $fixtureHost . ';port=' . ($db['port'] ?? 3306) . ';dbname=' . $sqlDestinationDb . ';charset=utf8mb4', $db['user'], $db['password'], [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+    $sqlDi = new Pimple\Container();
+    $sqlDi['dbal'] = new class($sqlPdo) {
+        public function __construct(private PDO $pdo) {}
+        public function getNativeConnection(): PDO { return $this->pdo; }
+    };
+    $sqlService = new Service(); $sqlService->setDi($sqlDi); $sqlService->install();
+    $sqlFingerprint = $sqlService->store()->verifyDestination()['fingerprint'];
+    $sqlSource = $sqlService->backup('source', ['backup_id' => $dumpJobId], 1);
+    foreach (['tblclients', 'tblcurrencies', 'tblclientgroups'] as $name) $sqlService->analyze($sqlSource['source_id'], $name);
+    $sqlNative = $sqlService->createRun(['source_id' => $sqlSource['source_id'], 'tables' => ['tblclients'], 'mode' => 'reference_native', 'confirmation' => 'PRESERVE HISTORY', 'accept_limitations' => true], 1);
+    $sqlService->control($sqlNative['id'], 'resume');
+    $steps = 0;
+    do {
+        $sqlResult = $sqlService->batch($sqlNative['id'], bin2hex(random_bytes(16)), 50);
+        if (++$steps > 100) throw new RuntimeException('Unbounded native SQL fixture');
+    } while ($sqlResult['status'] === 'running');
+    expect((int) $sqlService->store()->one('SELECT COUNT(*) AS n FROM client')['n'] === 3 && $sqlService->store()->one('SELECT first_name FROM client ORDER BY id LIMIT 1')['first_name'] === 'Changed fixture name', 'Actual native migration imports SQL-file clients into an independently fresh disposable FOSSBilling destination');
+    expect($sqlService->store()->verifyDestination()['fingerprint'] === $sqlFingerprint && $sqlService->store()->one('SELECT COUNT(*) AS n FROM email_queue')['n'] == 0, 'Native SQL import leaves core table structures unchanged and queues no email');
+    expect($service->backup('remove', ['backup_id' => $dumpJobId, 'confirmation' => 'REMOVE PRIVATE BACKUP'], 1)['removed'], 'Explicit cleanup removes terminal SQL source files without deleting imported evidence');
+    $dumpJobId = null;
+    expect(!$service->mapping($dumpSource['source_id'])['source_available'] && $store->one("SELECT id FROM whmcstofossbilling_archive WHERE source_id=? LIMIT 1", [$dumpSource['source_id']]) !== null, 'Removed SQL sources are marked unavailable while private archive evidence remains accessible');
     $service->uninstall();
     expect((int) $store->one('SELECT COUNT(*) AS n FROM client')['n'] === 3, 'Uninstall never deletes imported business records');
     echo "Integration suite finished. No live WHMCS connection was used.\n";
 } finally {
+    if ($dumpJobId !== null) (new \Box\Mod\Whmcstofossbilling\Source\Backup\Job((string) \FOSSBilling\Config::getProperty('info.salt')))->remove($dumpJobId, 1);
     // Delete only names generated by THIS test process, never user-provided database/account names.
-    foreach ([$sourceDb, $destinationDb] as $name) {
+    foreach (array_filter([$sourceDb, $destinationDb, $sqlDestinationDb]) as $name) {
         if (!preg_match('/\Awm_test_(source|destination)_[a-f0-9]{10}\z/D', $name)) {
             throw new RuntimeException('Cleanup scope validation failed.');
         }

@@ -134,6 +134,47 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         }
     }
 
+    public function destinationStatus(?int $source = null, string $mode = 'archive'): array
+    {
+        if (!$this->store()->schemaReady()) return ['ready' => false, 'schema_required' => true, 'unrelated_tables' => []];
+        if (!in_array($mode, ['archive', 'reference_native', 'historical_native'], true)) throw new SafeException('Unknown migration mode.');
+        if ($source !== null) $this->store()->source($source);
+        return \Box\Mod\Whmcstofossbilling\Destination\FreshCheck::check($this->store(), $mode === 'archive' ? null : $source);
+    }
+
+    public function backup(string $operation, #[\SensitiveParameter] array $input, int $owner): array
+    {
+        $this->requirements();
+        $job = new \Box\Mod\Whmcstofossbilling\Source\Backup\Job((string) Config::getProperty('info.salt'));
+        if ($operation === 'begin') return $job->begin($input, $owner);
+        $id = (string) ($input['backup_id'] ?? '');
+        if (in_array($operation, ['chunk', 'prepare'], true)) return $job->operate($id, $owner, $operation, $input);
+        $state = $job->read($id, $owner);
+        if ($operation === 'remove') {
+            if (($input['confirmation'] ?? '') !== 'REMOVE PRIVATE BACKUP') throw new SafeException('Confirm private backup removal first.');
+            $locks = [];
+            try {
+                foreach ($this->store()->all('SELECT id,credentials FROM whmcstofossbilling_source ORDER BY id') as $source) {
+                    $options = $this->vault()->open($source['credentials']);
+                    if (($options['backup_id'] ?? '') !== $id) continue;
+                    $name = 'whmcstofossbilling-source-' . $source['id']; $this->store()->lock($name); $locks[] = $name;
+                    if ($this->store()->one("SELECT id FROM whmcstofossbilling_run WHERE source_id=? AND status IN ('running','paused') LIMIT 1", [$source['id']])) throw new SafeException('This backup is required by an unfinished run. Finish or cancel it before removing its source files.');
+                }
+                $job->remove($id, $owner);
+            } finally {
+                foreach (array_reverse($locks) as $name) $this->store()->unlock($name);
+            }
+            return ['removed' => true];
+        }
+        if ($operation !== 'source' || $state['phase'] !== 'ready') throw new SafeException('Finish preparing the SQL backup before selecting it as a source.');
+        $options = ['kind' => 'sql_file', 'backup_id' => $id, 'prefix' => $state['prefix'], 'source_timezone' => $state['source_timezone'], 'timezone_detection' => \Box\Mod\Whmcstofossbilling\Source\SourceTimezone::selected($state['source_timezone'])];
+        $schema = $state['schema'];
+        $fingerprint = hash('sha256', 'sql-backup:' . $id);
+        $this->store()->execute('INSERT INTO whmcstofossbilling_source (fingerprint,label,credentials,schema_json,mapping_json,source_version,tested_at,created_at) VALUES (?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE tested_at=UTC_TIMESTAMP()', [$fingerprint, 'Uploaded WHMCS SQL backup', $this->vault()->seal($options), Store::json($schema), Store::json(Profile::defaults($schema)), $state['version']]);
+        $source = (int) $this->store()->one('SELECT id FROM whmcstofossbilling_source WHERE fingerprint=?', [$fingerprint])['id'];
+        return $this->mapping($source);
+    }
+
     public function mapping(int $source): array
     {
         $row = $this->store()->source($source);
@@ -143,6 +184,8 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
 
         return [
             'source_id' => $source, 'label' => $row['label'], 'version' => $row['source_version'],
+            'source_kind' => $options['kind'] ?? 'database', 'backup_id' => $options['backup_id'] ?? null,
+            'source_available' => ($options['kind'] ?? '') !== 'sql_file' || is_file(\Box\Mod\Whmcstofossbilling\Source\Backup\Job::directory($options['backup_id']) . '/state'),
             'source_timezone' => $options['source_timezone'] ?? '',
             'timezone_detection' => $options['timezone_detection'] ?? null,
             'connection_status' => $options['connection_status'] ?? null,
@@ -188,7 +231,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         $row = $this->store()->source($source);
         $schema = json_decode($row['schema_json'], true, 128, JSON_THROW_ON_ERROR);
         $definition = $schema[$name] ?? throw new SafeException('Unknown source table.');
-        $reader = new Reader($this->vault()->open($row['credentials']));
+        $reader = \Box\Mod\Whmcstofossbilling\Source\ReaderFactory::open($this->vault()->open($row['credentials']));
         if (Store::json($reader->inspect()) !== $row['schema_json']) {
             throw new SafeException('The source schema changed while analyzing ' . $name . '. Counts for this table cannot be refreshed. Test the connection again, then review and analyze the selected tables.');
         }
@@ -262,9 +305,10 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         if (!in_array($mode, ['dry_run', 'archive', 'reference_native', 'historical_native'], true)) {
             throw new SafeException('Unknown migration mode.');
         }
-        if ($mode !== 'dry_run' && (($input['confirmation'] ?? '') !== 'PRESERVE HISTORY' || empty($input['backup_verified']) || empty($input['accept_limitations']) || trim((string) ($input['backup_reference'] ?? '')) === '')) {
-            throw new SafeException('Confirm a verified destination backup, acknowledge the limitations and type PRESERVE HISTORY.');
+        if ($mode !== 'dry_run' && (($input['confirmation'] ?? '') !== 'PRESERVE HISTORY' || empty($input['accept_limitations']))) {
+            throw new SafeException('Acknowledge the migration limitations and type PRESERVE HISTORY.');
         }
+        if ($mode !== 'dry_run') \Box\Mod\Whmcstofossbilling\Destination\FreshCheck::assertReady($this->store(), $mode === 'archive' ? null : (int) $source['id']);
         if ($mode === 'historical_native' && empty($input['destination_exclusive'])) throw new SafeException('Historical financial publication requires explicit confirmation of an otherwise idle, private destination. This tool does not disable global automation.');
         $invalidFallback = (string) ($input['invalid_date_fallback'] ?? '');
         if ($invalidFallback !== '' && $invalidFallback !== '1900') {
@@ -305,7 +349,8 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
             }
         }
         $plan['source_timezone_evidence'] = $options['timezone_detection'] ?? null;
-        $plan['source_security_mode'] = ConnectionOptions::validate($options, true)['security_mode'];
+        $plan['source_security_mode'] = ($options['kind'] ?? '') === 'sql_file' ? 'sql_file' : ConnectionOptions::validate($options, true)['security_mode'];
+        if (($options['kind'] ?? '') === 'sql_file') $plan['source_backup_id'] = $options['backup_id'];
         $plan['source_prefix'] = $options['prefix'];
         $plan['adapter_revision'] = 2;
         $plan['invalid_date_fallback'] = $invalidFallback === '1900' ? NativeWriter::DATE_FALLBACK : null;
@@ -321,8 +366,9 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
             if ($mode !== 'dry_run' && $store->one("SELECT id FROM whmcstofossbilling_run WHERE source_id=? AND mode<>'dry_run' AND status IN ('running','paused') LIMIT 1", [$source['id']])) {
                 throw new SafeException('Another archival/native run for this source is unfinished. Finish or cancel it before creating another non-preview run.');
             }
+            if (isset($plan['source_backup_id'])) \Box\Mod\Whmcstofossbilling\Source\ReaderFactory::open($options)->inspect();
             $store->pdo->beginTransaction();
-            $store->execute('INSERT INTO whmcstofossbilling_run (id,source_id,status,mode,schema_json,mapping_json,plan_json,owner_id,backup_reference,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())', [$id, $source['id'], 'paused', $mode, Store::json($schema), Store::json($profile), Store::json($plan), $admin, mb_substr(trim((string) ($input['backup_reference'] ?? 'dry run')), 0, 255)]);
+            $store->execute('INSERT INTO whmcstofossbilling_run (id,source_id,status,mode,schema_json,mapping_json,plan_json,owner_id,backup_reference,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())', [$id, $source['id'], 'paused', $mode, Store::json($schema), Store::json($profile), Store::json($plan), $admin, $mode === 'dry_run' ? 'dry run' : 'Fresh installation / migration-owned records verified']);
             foreach ($plan['tables'] as $table => $bounds) {
                 $store->execute('INSERT INTO whmcstofossbilling_cursor (run_id,table_name,expected,maximum) VALUES (?,?,?,?)', [$id, $table, $bounds['count'], $bounds['maximum']]);
             }

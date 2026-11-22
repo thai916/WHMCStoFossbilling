@@ -78,6 +78,24 @@ final class Admin extends \FOSSBilling\Api\AbstractApi
         return $this->guarded('configure', fn (): array => $this->getService()->testConnection($data));
     }
 
+    public function destination_status(array $data = []): array
+    {
+        return $this->guarded('view', fn (): array => $this->getService()->destinationStatus((int) ($data['source_id'] ?? 0) > 0 ? (int) $data['source_id'] : null, (string) ($data['mode'] ?? 'archive')));
+    }
+
+    private function backupCall(string $operation, #[\SensitiveParameter] array $data): array
+    {
+        return $this->guarded('configure', function () use ($operation, $data): array {
+            $identity = $this->getIdentity();
+            return $this->getService()->backup($operation, $data, (int) (method_exists($identity, 'getId') ? $identity->getId() : $identity->id));
+        });
+    }
+    public function backup_begin(array $data): array { return $this->backupCall('begin', $data); }
+    public function backup_chunk(#[\SensitiveParameter] array $data): array { return $this->backupCall('chunk', $data); }
+    public function backup_prepare(array $data): array { return $this->backupCall('prepare', $data); }
+    public function backup_source(array $data): array { return $this->backupCall('source', $data); }
+    public function backup_remove(array $data): array { return $this->backupCall('remove', $data); }
+
     public function mapping_get(array $data): array
     {
         return $this->guarded('configure', fn (): array => $this->getService()->mapping((int) ($data['source_id'] ?? 0)));

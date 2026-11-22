@@ -70,16 +70,21 @@ final class Reader
     {
         $statement = $this->pdo->prepare("SELECT c.TABLE_NAME, c.COLUMN_NAME, c.COLUMN_TYPE, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_KEY,t.ENGINE FROM information_schema.COLUMNS c JOIN information_schema.TABLES t ON t.TABLE_SCHEMA=c.TABLE_SCHEMA AND t.TABLE_NAME=c.TABLE_NAME WHERE c.TABLE_SCHEMA = ? AND t.TABLE_TYPE='BASE TABLE' ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION");
         $statement->execute([$this->options['database']]);
+        return self::fromColumns($statement, $this->options['prefix']);
+    }
+
+    public static function fromColumns(iterable $columns, string $prefix): array
+    {
         $tables = [];
-        foreach ($statement as $column) {
+        foreach ($columns as $column) {
             $name = $column['TABLE_NAME'];
-            if (!str_starts_with($name, $this->options['prefix'])) {
+            if (!str_starts_with($name, $prefix)) {
                 continue;
             }
             self::identifier($name);
             self::identifier($column['COLUMN_NAME']);
             if (in_array($column['COLUMN_NAME'], ['__wm_oversized', '__wm_missing'], true)) throw new SafeException('Source schema collides with reserved extractor metadata names.');
-            $suffix = substr($name, strlen($this->options['prefix']));
+            $suffix = substr($name, strlen($prefix));
             $tables[$name] ??= ['suffix' => $suffix, 'engine' => $column['ENGINE'], 'columns' => [], 'key' => null, 'classification' => Sensitive::table($suffix) ? 'excluded_sensitive' : 'archive'];
             $tables[$name]['columns'][$column['COLUMN_NAME']] = [
                 'type' => $column['COLUMN_TYPE'],
@@ -107,7 +112,7 @@ final class Reader
         }
         unset($table);
         foreach (['clients', 'products', 'hosting', 'invoices', 'invoiceitems', 'accounts'] as $required) {
-            if (!isset($tables[$this->options['prefix'] . $required])) {
+            if (!isset($tables[$prefix . $required])) {
                 throw new SafeException('Required WHMCS tables are missing or inaccessible. This is not a supported complete source schema.');
             }
         }
