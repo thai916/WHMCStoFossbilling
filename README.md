@@ -26,7 +26,7 @@ This extension is **vibe coded**. It requires independent security review and di
 - Batched dry run with an explicit archive/reference/historical target: source scan, client conflict checks and supported-adapter value/eligibility validation. **Not a simulation of every insertion, aggregate or financial relationship.**
 - Fresh-install/ownership checks and explicit authorization before non-preview runs; no mandatory destination backup reference.
 - Two source choices: existing SELECT-only database connection, or private streamed SQL/GZIP/ZIP upload with no SQL execution or staging database.
-- Durable per-record checkpoints, source-level database advisory locks, committed-request replay, pause/resume/cancel, bounded failed-record retry.
+- Durable per-record checkpoints, source-level database advisory locks, committed-request replay, pause/resume/cancel, bounded failed-record retry. Step 4 groups batches into paced server-side drive calls so FOSSBilling's shared API rate limiter is not exhausted by browser polling.
 - Cross-run identity mappings and unchanged-record skipping. Changed native records are **not** automatically updated.
 - Structured administrator-only archives, indexed relationships, original dates, disclosed exclusions/redactions and prior revisions. Per-run extracted snapshots cannot be replaced by a later run's latest archive.
 - Native currencies, client groups, clients, categories and **disabled/hidden/manual products**.

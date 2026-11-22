@@ -245,6 +245,21 @@ try {
     rejects(fn () => (new \Box\Mod\Whmcstofossbilling\Destination\NativeWriter($store, $profile['source_id'], 'tbl'))->validateClientPreview($clientTimestamp, $clientRules), 'Client DATETIME registrations cannot silently assume UTC when the source timezone is unresolved');
     expect((int) $store->one('SELECT COUNT(*) AS n FROM client')['n'] === 0, 'Dry run creates no destination clients');
     expect((int) $store->one('SELECT COUNT(*) AS n FROM whmcstofossbilling_archive')['n'] === 0, 'Dry run creates no historical archive records');
+    $drivenPreview = $service->createRun($runInput + ['mode' => 'dry_run'], 1);
+    $pausedDrive = $service->drive($drivenPreview['id'], str_repeat('e', 32), 2000, 50);
+    $service->control($drivenPreview['id'], 'resume');
+    expect($pausedDrive['status'] === 'paused' && $pausedDrive['batch_processed'] === 0, 'A paused run cannot be advanced by a drive request');
+    $driveId = str_repeat('d', 32);
+    $firstDrive = $service->drive($drivenPreview['id'], $driveId, 2000, 50);
+    expect($service->drive($drivenPreview['id'], $driveId, 2000, 50) === $firstDrive, 'Repeated drive identifier returns the original result without processing again');
+    expect($firstDrive['batch_processed'] > 0 && isset($firstDrive['categories'], $firstDrive['reconciliation']), 'One drive request processes batches and returns the complete status');
+    $driven = $firstDrive;
+    $driveSteps = 0;
+    while ($driven['status'] === 'running' && ++$driveSteps < 100) {
+        $driven = $service->drive($drivenPreview['id'], str_repeat('d', 30) . sprintf('%02x', $driveSteps), 2000, 50);
+    }
+    expect(!in_array($driven['status'], ['running', 'paused'], true), 'Repeated rate-limit-safe drive calls finish an authorized preview');
+    rejects(fn () => $service->drive($drivenPreview['id'], 'not-a-drive-id'), 'Drive identifiers must be 32 lowercase hex characters');
     $advancedPreview = $service->createRun($runInput + ['mode' => 'dry_run', 'target_mode' => 'historical_native'], 1);
     $service->control($advancedPreview['id'], 'resume');
     do {

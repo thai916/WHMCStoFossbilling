@@ -56,6 +56,13 @@ is not reused: activate the newly named module and review its permissions.
   non-secure local origins such as `http://fossbill.test`. A Web Crypto fallback
   keeps the 32-character lowercase hex idempotency key that prevents duplicate
   batch processing.
+- Step 4 no longer sends a status request after every 50-record batch. Each
+  bounded drive request processes several idempotent server-side batches and
+  returns the full run status, then the wizard waits about eight seconds before
+  the next call. This stays under FOSSBilling's shared hourly API limiter, which
+  counts every authenticated admin request twice. A 429 response stops polling,
+  shows the server's `Retry-After` wait and never retries automatically; core
+  rate-limit settings are not changed.
 
 ## Historical dates and progress
 

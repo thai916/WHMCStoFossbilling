@@ -155,6 +155,16 @@ final class Admin extends \FOSSBilling\Api\AbstractApi
         return $this->guarded('execute', fn (): array => $this->getService()->batch((string) ($data['run_id'] ?? ''), (string) ($data['request_id'] ?? ''), (int) ($data['limit'] ?? 50)));
     }
 
+    public function run_drive(array $data): array
+    {
+        return $this->guarded('execute', fn (): array => $this->getService()->drive(
+            (string) ($data['run_id'] ?? ''),
+            (string) ($data['drive_id'] ?? ''),
+            (int) ($data['budget_ms'] ?? 9000),
+            (int) ($data['limit'] ?? 100)
+        ));
+    }
+
     public function run_retry(array $data): array
     {
         return $this->guarded('execute', fn (): array => $this->getService()->retry((string) ($data['run_id'] ?? '')));

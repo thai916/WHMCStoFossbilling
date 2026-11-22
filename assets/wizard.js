@@ -8,6 +8,10 @@
     let observer = null, replacement = null, watchVersion = 0;
     let chosenKind = null, needUpgrade = false, backup = null, backupFile = null, backupPaused = false;
     const counts = new Map();
+    function timing(name, fallback) {
+        const value = Number(root.dataset[name]);
+        return Number.isFinite(value) && value >= 0 ? value : fallback;
+    }
     function batchRequestId() {
         const webcrypto = globalThis.crypto;
         if (typeof webcrypto?.randomUUID === "function") return webcrypto.randomUUID().replace(/-/g, "");
@@ -91,9 +95,10 @@
             } catch (error) {
                 if (watchVersion !== version || run?.id !== id) return;
                 $("progress-bar").classList.remove("wm-working");
+                if (error.rateLimited) { notice(error.message, true); scrollToTop(); return; }
                 notice(`${error.message} Automatic status refresh stopped. Use Refresh status after resolving this.`, true);
             }
-        }, 2500);
+        }, Math.max(1000, timing("statusInterval", 10000)));
     }
     function sessionError(message) {
         const error = new Error(message);
@@ -123,6 +128,14 @@
         if (!result || typeof result !== "object") throw new Error("FOSSBilling returned an invalid API response. Stop and check the server before retrying.");
         if (!response.ok || result.error) {
             const message = result.error?.message || "Request failed. Stop and review the server status before retrying.";
+            if (response.status === 429 || /rate limit exceeded/i.test(message)) {
+                const seconds = Number(response.headers.get("Retry-After"));
+                const wait = Number.isFinite(seconds) && seconds > 0 ? ` Wait about ${Math.ceil(seconds)} seconds, or reset the admin API counter under Security → Rate limits.` : " Wait for the hourly counter to recover, or reset it under Security → Rate limits.";
+                const error = new Error(`FOSSBilling's API rate limit was reached. Automatic activity stopped. No further requests were sent.${wait}`);
+                error.rateLimited = true;
+                error.retryAfter = Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : null;
+                throw error;
+            }
             if ([201, 202, 203, 204, 205, 206].includes(Number(result.error?.code)) || /^authentication failed$/i.test(message.trim())) {
                 throw sessionError("FOSSBilling could not authenticate your administrator session. Sign in to FOSSBilling again, reload this wizard, and select your saved source. This is not a WHMCS database password error.");
             }
@@ -150,7 +163,7 @@
                 details.append(element("summary", `${error.pendingTables.length} tables still need count refresh`), element("p", error.pendingTables.join(", ")));
                 $("notice").append(details);
             }
-            if (error.kind === "session" || event?.currentTarget?.id === "wm-authorize") scrollToTop();
+            if (error.kind === "session" || error.rateLimited || event?.currentTarget?.id === "wm-authorize") scrollToTop();
         } finally { if (button) button.disabled = false; }
     };
     function step(name) {
@@ -796,10 +809,11 @@
         run = await api("run_control", { run_id: run.id, action: "resume" });
         pumping = true; renderRun();
         while (pumping && run.status === "running") {
-            const result = await api("run_batch", { run_id: run.id, request_id: batchRequestId(), limit: 50 });
-            await refreshRun();
-            if (result.status !== "running") break;
-            await new Promise(resolve => setTimeout(resolve, 200));
+            run = await api("run_drive", { run_id: run.id, drive_id: batchRequestId(), budget_ms: 9000, limit: 100 });
+            renderRun();
+            if (run.status !== "running") break;
+            const pause = timing("driveInterval", 8000);
+            if (pause > 0) await new Promise(resolve => setTimeout(resolve, pause));
         }
         pumping = false; stopWatching();
         notice("Batch scheduling stopped. Review status and exceptions; this is not a declaration of a complete migration.");

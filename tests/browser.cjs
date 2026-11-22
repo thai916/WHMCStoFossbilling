@@ -63,6 +63,8 @@ const historicalRun = {
 const requests = [];
 const testedModes = [];
 const batchRequestIds = [];
+const driveRequestIds = [];
+let rateLimitNextStatus = false;
 let uploadedBytes = 0, uploadTotal = 0, backupPreparations = 0;
 let backupChunkGate = null, backupSortGate = null;
 let destinationResult = { ready: true, unrelated_tables: [], tables: {} };
@@ -191,11 +193,23 @@ const server = http.createServer((request, response) => {
                     currentRun.status = data.action === "resume" ? "running" : data.action === "cancel" ? "cancelled" : "paused";
                     if (data.action === "cancel") syntheticExisting = null;
                     result = currentRun; break;
+                case "run_drive":
+                    assert.match(data.drive_id, /^[a-f0-9]{32}$/, "Drive idempotency key stays 32 lowercase hex characters without randomUUID");
+                    assert.equal(data.limit, 100, "One drive call requests the largest supported batch size");
+                    assert.equal(data.budget_ms, 9000, "Drive calls use the rate-limit-safe server budget");
+                    driveRequestIds.push(data.drive_id);
+                    currentRun.status = "preview_finished"; currentRun.categories[0].processed = 1; currentRun.categories[0].archived = 1; result = currentRun; break;
                 case "run_batch":
                     assert.match(data.request_id, /^[a-f0-9]{32}$/, "Batch idempotency key stays 32 lowercase hex characters without randomUUID");
                     batchRequestIds.push(data.request_id);
                     currentRun.status = "preview_finished"; currentRun.categories[0].processed = 1; currentRun.categories[0].archived = 1; result = { status: currentRun.status }; break;
-                case "run_status": result = data.run_id === historicalRunId ? historicalRun : currentRun; break;
+                case "run_status":
+                    if (rateLimitNextStatus) {
+                        rateLimitNextStatus = false;
+                        await route.fulfill({ status: 429, contentType: "application/json", headers: { "Retry-After": "45" }, body: JSON.stringify({ result: null, error: { message: "Rate limit exceeded. Please try again later.", code: 429 } }) });
+                        return;
+                    }
+                    result = data.run_id === historicalRunId ? historicalRun : currentRun; break;
                 case "archive_search":
                     assert.equal(data.legacy_kind, "invoice");
                     assert.equal(data.legacy_reference, "LEGACY-001");
@@ -216,6 +230,11 @@ const server = http.createServer((request, response) => {
         });
         await page.goto(`http://127.0.0.1:${port}/`);
         await page.waitForLoadState("networkidle");
+        await page.evaluate(() => {
+            const root = document.getElementById("whmcstofossbilling");
+            root.dataset.driveInterval = "0";
+            root.dataset.statusInterval = "50";
+        });
         assert.equal(await page.locator(".wm-source-option:visible").count(), 2, "First page offers only two source choices");
         assert.equal(await page.locator("#wm-connection").isVisible(), false, "Connection fields stay hidden until selected");
         assert.equal(await page.locator("#wm-upload").isVisible(), false, "Upload fields stay hidden until selected");
@@ -360,7 +379,7 @@ const server = http.createServer((request, response) => {
         await page.locator("#wm-mode").selectOption("historical_native");
         await page.locator("#wm-invalid-date-fallback").check();
         await page.locator("#wm-dry-run").click();
-        assert.equal(requests.includes("run_batch"), false, "Preview creation cannot start scheduling before explicit Resume");
+        assert.equal(requests.includes("run_drive"), false, "Preview creation cannot start processing before explicit Resume");
         await page.locator("#wm-top-progress").waitFor({ state: "visible" });
         await page.waitForFunction(() => !document.getElementById("wm-dry-run").disabled && window.scrollY === 0);
         assert.equal(await page.evaluate(() => window.scrollY), 0, "Dry-run creation scrolls to top");
@@ -372,8 +391,9 @@ const server = http.createServer((request, response) => {
         assert.equal(await page.locator("#wm-top-progress [role=progressbar]").getAttribute("aria-valuenow"), "0");
         await page.locator("#wm-resume").click();
         await page.waitForFunction(() => document.getElementById("wm-run-summary").textContent.includes("preview_finished"));
-        assert.ok(batchRequestIds.length >= 1, "Resume schedules at least one batch when randomUUID is unavailable");
-        assert.equal(new Set(batchRequestIds).size, batchRequestIds.length, "Fallback batch ids remain unique");
+        assert.ok(driveRequestIds.length >= 1, "Resume drives at least one bounded batch group when randomUUID is unavailable");
+        assert.equal(new Set(driveRequestIds).size, driveRequestIds.length, "Fallback drive ids remain unique");
+        assert.equal(requests.filter(name => name === "run_batch").length, 0, "Resume no longer polls one batch per API request");
         assert.equal(await page.locator("#wm-progress-percent").innerText(), "100%", "Top progress bar reaches 100% after all expected records are scanned");
         assert.equal(await page.locator("#wm-progress-bar").evaluate(el => el.style.width), "100%");
         assert.equal(await page.locator("#wm-top-progress [role=progressbar]").getAttribute("aria-valuenow"), "100");
@@ -391,7 +411,7 @@ const server = http.createServer((request, response) => {
         assert.equal(requests.filter(name => name === "run_create").length, createsBeforeInvalid);
         await page.locator('[name="accept_limitations"]').check();
         await page.locator("#wm-confirm").fill("PRESERVE HISTORY");
-        const batchesBeforeAuthorization = requests.filter(name => name === "run_batch").length;
+        const batchesBeforeAuthorization = requests.filter(name => name === "run_drive").length;
         // The actual admin layout wraps content in page/page-wrapper/page-body. Exercise
         // a nested scrolling variant, not just the document-only minimal layout.
         await page.evaluate(() => {
@@ -495,7 +515,7 @@ const server = http.createServer((request, response) => {
         await waitTop();
         assert.equal(await page.evaluate(() => window.scrollY), 0, "Authorized-run success scrolls to top");
         assert.equal(await page.locator("#nested-admin-scroll").evaluate(el => el.scrollTop), 0, "Authorized-run success scrolls the nested admin container");
-        assert.equal(requests.filter(name => name === "run_batch").length, batchesBeforeAuthorization, "Authorized creation remains paused without scheduling batches");
+        assert.equal(requests.filter(name => name === "run_drive").length, batchesBeforeAuthorization, "Authorized creation remains paused without scheduling batches");
         assert.equal(await page.locator("#wm-top-progress").evaluate(el => { const box = el.getBoundingClientRect(); return box.top >= 0 && box.bottom <= window.innerHeight; }), true, "Authorized-run progress is in the viewport after creation");
         await page.screenshot({ path: path.join(artifacts, "preservation-progress.png"), fullPage: true });
         currentRun.categories[0].expected = 0;
@@ -530,10 +550,10 @@ const server = http.createServer((request, response) => {
         await page.locator('[data-step="analysis"]').click();
         await authorize.click();
         await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("archive · running"));
-        const batchesBeforeWatch = requests.filter(name => name === "run_batch").length;
+        const batchesBeforeWatch = requests.filter(name => name === "run_drive").length;
         currentRun.categories[0].processed = 1;
         await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("1/1 records scanned"));
-        assert.equal(requests.filter(name => name === "run_batch").length, batchesBeforeWatch, "Watching an existing running run never schedules duplicate batches");
+        assert.equal(requests.filter(name => name === "run_drive").length, batchesBeforeWatch, "Watching an existing running run never schedules duplicate batches");
         currentRun.status = "paused";
         await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("archive · paused"));
         assert.equal(await page.locator("#wm-progress-bar").evaluate(el => el.classList.contains("wm-working")), false, "Animation stops when a watched run pauses");
@@ -565,6 +585,12 @@ const server = http.createServer((request, response) => {
         assert.ok(financialRows.some(row => row.includes("EUR") && row.includes("Not represented")), "Missing native value is not rendered as zero");
         assert.match(await page.locator("#wm-credit-results").innerText(), /Closing balance mismatch/);
         assert.equal(await page.evaluate(() => window.XSS_EXECUTED), undefined, "Financial diagnostics never execute HTML");
+        const statusesBeforeLimit = requests.filter(name => name === "run_status").length;
+        rateLimitNextStatus = true;
+        await page.locator("#wm-refresh").click();
+        await page.getByText(/API rate limit was reached/, { exact: false }).waitFor();
+        assert.match(await page.locator("#wm-notice").innerText(), /Wait about 45 seconds/, "Retry-After is shown without retrying automatically");
+        assert.equal(requests.filter(name => name === "run_status").length, statusesBeforeLimit + 1, "A 429 stops polling after the rejected request");
         await page.locator('[data-step="connection"]').click();
         await page.locator("#wm-change-source").click();
         await page.locator("#wm-choose-upload").click();

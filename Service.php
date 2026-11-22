@@ -429,6 +429,43 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         return (new Engine($this->store(), $this->vault()))->batch($run, $request, $limit);
     }
 
+    /**
+     * Runs several bounded batches inside one API request. FOSSBilling counts
+     * every authenticated admin call twice (pre-auth IP plus account), so
+     * browser-side per-batch polling exhausts the shared hourly limiter.
+     */
+    public function drive(string $run, string $request, int $budgetMs = 9000, int $limit = 100): array
+    {
+        if (!preg_match('/\A[a-f0-9]{32}\z/D', $request)) throw new SafeException('Invalid drive request identifier.');
+        if ($budgetMs < 1000 || $budgetMs > 15000 || $limit < 1 || $limit > 100) throw new SafeException('Invalid drive budget or batch size.');
+        $store = $this->store();
+        $cached = $store->one('SELECT result_json FROM whmcstofossbilling_batch WHERE run_id=? AND request_id=?', [$run, $request]);
+        if ($cached) return json_decode($cached['result_json'], true, 512, JSON_THROW_ON_ERROR);
+
+        $engine = new Engine($store, $this->vault());
+        $processed = 0;
+        $batches = 0;
+        $started = microtime(true);
+        $status = $store->run($run)['status'];
+        while ($status === 'running' && $batches < 4 && (microtime(true) - $started) * 1000 < $budgetMs) {
+            $derived = substr(hash('sha256', $request . ':' . $batches), 0, 32);
+            $result = $engine->batch($run, $derived, $limit);
+            $processed += (int) ($result['batch_processed'] ?? 0);
+            $status = (string) $result['status'];
+            ++$batches;
+            // Reconciliation and credit publication report zero processed rows;
+            // return instead of spinning through the same no-op inside one call.
+            if ($result['batch_processed'] === 0) break;
+        }
+
+        $result = $this->status($run);
+        $result['batch_processed'] = $processed;
+        $result['batches'] = $batches;
+        $store->execute('INSERT INTO whmcstofossbilling_batch (run_id,request_id,result_json,created_at) VALUES (?,?,?,UTC_TIMESTAMP())', [$run, $request, Store::json($result)]);
+
+        return $result;
+    }
+
     public function retry(string $run): array
     {
         return (new Engine($this->store(), $this->vault()))->retry($run);
