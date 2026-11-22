@@ -65,6 +65,8 @@ const testedModes = [];
 const batchRequestIds = [];
 let uploadedBytes = 0, uploadTotal = 0, backupPreparations = 0;
 let backupChunkGate = null, backupSortGate = null;
+let destinationResult = { ready: true, unrelated_tables: [], tables: {} };
+let expectOverwrite = false;
 const server = http.createServer((request, response) => {
     const item = content[request.url];
     if (!item) { response.writeHead(404); response.end(); return; }
@@ -89,7 +91,7 @@ const server = http.createServer((request, response) => {
             assert.equal(request.headers()["x-csrf-token"], "test-session-csrf");
             let result;
             switch (method) {
-                case "destination_status": result = { ready: true, unrelated_tables: [] }; break;
+                case "destination_status": result = destinationResult; break;
                 case "backup_begin": uploadTotal = data.size; uploadedBytes = 0; result = { backup_id: "d".repeat(32), chunk_size: 262144 }; break;
                 case "backup_chunk":
                     if (backupChunkGate) { const pending = backupChunkGate; backupChunkGate = null; await pending; }
@@ -174,6 +176,13 @@ const server = http.createServer((request, response) => {
                     } else {
                         assert.equal(data.mode, "archive", "Authorized run uses a synthetic API only; no live writes");
                         assert.equal(data.confirmation, "PRESERVE HISTORY");
+                        if (expectOverwrite) {
+                            assert.equal(data.overwrite_acknowledged, "1", "Confirmed overwrite acknowledgement is submitted");
+                            assert.equal(data.overwrite_confirmation, "OVERWRITE FOSSBILLING DATA", "Exact overwrite phrase is submitted");
+                            expectOverwrite = false;
+                        } else {
+                            assert.equal(data.overwrite_confirmation, "", "Hidden overwrite phrase is not submitted");
+                        }
                     }
                     currentRun = { id: "a".repeat(32), mode: data.mode, status: "paused", last_batch_at: null, categories: [{ table_name: "tblclients", expected: 1, processed: 0, imported: 0, archived: 0, skipped: 0, failed: 0 }], errors: [], reconciliation: { reason: "Not performed" } };
                     result = currentRun; break;
@@ -453,8 +462,36 @@ const server = http.createServer((request, response) => {
         assert.equal(await page.evaluate(() => window.scrollY), 0, "Authorized-run failure scrolls to top");
         assert.equal(await page.evaluate(() => window.TEST_SCROLL_BEHAVIORS.at(-1)), "instant", "Reduced motion disables smooth scrolling");
         await page.emulateMedia({ reducedMotion: "no-preference" });
+        destinationResult = {
+            ready: false,
+            unrelated_tables: ["client", "email_queue"],
+            tables: {
+                client: { total: 4, owned: 3, unowned: 1 },
+                email_queue: { total: 1, owned: 0, unowned: 1 }
+            }
+        };
+        await page.locator('[data-step="analysis"]').click();
+        await page.locator("#wm-mode").selectOption("reference_native");
+        await page.locator("#wm-mode").selectOption("archive");
+        await page.locator("#wm-overwrite-panel").waitFor({ state: "visible" });
+        assert.match(await page.locator("#wm-overwrite-tables").innerText(), /client — 4 rows \(1 not owned by this migration, 3 owned by it\)/);
+        assert.match(await page.locator("#wm-overwrite-tables").innerText(), /email_queue — 1 rows/);
+        const createsBeforeOverwrite = requests.filter(name => name === "run_create").length;
+        await page.locator("#wm-overwrite-confirm").fill("WRONG");
+        await authorize.click();
+        await page.getByText("Provide both the overwrite acknowledgement", { exact: false }).waitFor();
+        assert.equal(requests.filter(name => name === "run_create").length, createsBeforeOverwrite, "An incomplete overwrite acknowledgement stops before run creation");
+        await page.locator("#wm-overwrite-acknowledged").check();
+        await page.locator("#wm-overwrite-confirm").fill("OVERWRITE FOSSBILLING DATA");
+        let overwriteDialog = "";
+        page.once("dialog", async dialog => { overwriteDialog = dialog.message(); await dialog.accept(); });
+        expectOverwrite = true;
         await authorize.click();
         await page.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("archive · paused"));
+        assert.match(overwriteDialog, /Permanently delete every row/, "Destructive overwrite requires a final browser confirmation");
+        destinationResult = { ready: true, unrelated_tables: [], tables: {} };
+        await page.locator("#wm-mode").dispatchEvent("change");
+        await page.locator("#wm-overwrite-panel").waitFor({ state: "hidden" });
         await waitTop();
         assert.equal(await page.evaluate(() => window.scrollY), 0, "Authorized-run success scrolls to top");
         assert.equal(await page.locator("#nested-admin-scroll").evaluate(el => el.scrollTop), 0, "Authorized-run success scrolls the nested admin container");

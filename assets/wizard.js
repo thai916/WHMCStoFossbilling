@@ -57,6 +57,23 @@
         $("preparation-bar").classList.remove("wm-working", "wm-indeterminate");
     }
     function stopWatching() { clearTimeout(observer); observer = null; ++watchVersion; }
+    function hideOverwrite() {
+        $("overwrite-panel").classList.add("d-none");
+        $("overwrite-acknowledged").checked = false;
+        $("overwrite-confirm").value = "";
+        $("overwrite-tables").replaceChildren();
+    }
+    function overwriteIntent() {
+        if ($("overwrite-panel").classList.contains("d-none")) return false;
+        const checked = $("overwrite-acknowledged").checked;
+        const phrase = $("overwrite-confirm").value.trim();
+        if (!checked && phrase === "") return false;
+        if (!checked || phrase !== "OVERWRITE FOSSBILLING DATA") throw new Error("Provide both the overwrite acknowledgement and the exact phrase OVERWRITE FOSSBILLING DATA. No run was created.");
+        return true;
+    }
+    function confirmOverwrite() {
+        return window.confirm("Permanently delete every row in the listed FOSSBilling business tables, including genuine customer data and failed-migration leftovers? This cannot be undone. Table structures will not change.");
+    }
     function watchRun() {
         stopWatching();
         if (!run || run.status !== "running" || pumping) return;
@@ -178,10 +195,24 @@
         const sourceId = source?.source_id || 0, mode = $("mode").value;
         const status = await api("destination_status", { source_id: sourceId, mode });
         if ((source?.source_id || 0) !== sourceId || $("mode").value !== mode) return;
+        const existing = Object.entries(status.tables || {}).filter(([, value]) => Number(value.total) > 0);
+        const showOverwrite = !status.schema_required && (!status.ready || existing.length > 0);
         $("destination-status").className = `alert ${status.ready ? "alert-success" : "alert-warning"}`;
-        $("destination-status").textContent = status.schema_required ? "Install or upgrade the extension tracking tables using the button above before preparing a source." : status.ready
-            ? "Ready: FOSSBilling is fresh or contains only migration-owned records. No destination backup reference is needed."
-            : `Unrelated business records or records from another migration were found in: ${status.unrelated_tables.join(", ")}. Use a fresh FOSSBilling installation or resume the original source. Nothing will be deleted or changed to make it fresh.`;
+        $("destination-status").textContent = status.schema_required
+            ? "Install or upgrade the extension tracking tables using the button above before preparing a source."
+            : status.ready && existing.length === 0
+                ? "Ready: FOSSBilling is fresh or contains only migration-owned records. No destination backup reference is needed."
+                : status.ready
+                    ? "Ready to resume: this FOSSBilling installation contains migration-owned business records. Resume this source, or use the destructive overwrite option to start clean."
+                    : `Unrelated business records or records from another migration were found in: ${status.unrelated_tables.join(", ")}. Use a fresh FOSSBilling installation, resume the original source, or confirm the destructive overwrite below. Nothing is deleted until that exact confirmation is submitted.`;
+        if (!showOverwrite) { hideOverwrite(); return; }
+        $("overwrite-panel").classList.remove("d-none");
+        $("overwrite-description").textContent = status.ready
+            ? "These rows are owned by this migration and can be resumed. Choose overwrite only if you want them permanently deleted before importing again."
+            : "These rows block a new authorized run. Choosing overwrite permanently deletes them before the new paused run is created.";
+        $("overwrite-tables").replaceChildren(...(existing.length
+            ? existing.map(([name, value]) => element("li", `${name} — ${value.total} rows (${value.unowned} not owned by this migration, ${value.owned} owned by it)`))
+            : [element("li", "The server reported blocking records; exact row counts were not returned.")]));
     }
     function showSetup(kind) {
         chosenKind = kind;
@@ -649,6 +680,8 @@
     }
     $("dry-run").addEventListener("click", handle(async () => createRun("dry_run", { invalid_date_fallback: $("invalid-date-fallback").checked ? "1900" : "" })));
     $("authorize").addEventListener("submit", handle(async () => {
+        const overwrite = overwriteIntent();
+        if (overwrite && !confirmOverwrite()) return;
         const data = Object.fromEntries(new FormData($("authorize")));
         await createRun(data.mode, data);
     }));
@@ -683,8 +716,10 @@
             step("analysis");
             throw new Error("Type PRESERVE HISTORY exactly and confirm the required safety checkboxes before cancelling existing work. Historical financial mode also requires the private, idle destination confirmation.");
         }
+        const overwrite = overwriteIntent();
         const snapshot = JSON.stringify({ data, tables: selectedTables(), profile });
-        if (!window.confirm("Cancel future batches for this existing run and create a new paused run using your current reviewed choices? Already imported records and history will remain. Nothing will be deleted or rolled back.")) return;
+        if (overwrite && !confirmOverwrite()) return;
+        if (!window.confirm(`Cancel future batches for this existing run and create a new paused run using your current reviewed choices? ${overwrite ? "The confirmed overwrite will delete the listed FOSSBilling records." : "Already imported records and history will remain."} Nothing is rolled back.`)) return;
         stopWatching();
         preparing = true;
         try {

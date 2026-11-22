@@ -11,9 +11,9 @@ final class FreshCheck
     /** Reference defaults are allowed. Business rows must belong to this migration. */
     public static function check(Store $store, ?int $source = null): array
     {
-        $tables = ['client', 'product', 'product_payment', 'client_order', 'service_hosting', 'service_hosting_hp', 'service_hosting_server', 'service_domain', 'invoice', 'invoice_item', 'transaction', 'client_balance', 'support_ticket', 'support_ticket_message', 'support_ticket_note', 'activity_client_email'];
         $unrelated = [];
-        foreach ($tables as $table) {
+        foreach (Overwrite::TABLES as $table) {
+            if ($table === 'email_queue') continue;
             $parameters = [$table];
             $scope = '';
             if ($source !== null) { $scope = ' AND source_id=?'; $parameters[] = $source; }
@@ -25,6 +25,6 @@ final class FreshCheck
     public static function assertReady(Store $store, ?int $source = null): void
     {
         $status = self::check($store, $source);
-        if (!$status['ready']) throw new SafeException('Use a fresh FOSSBilling installation or resume the same migration. Unrelated business records were found in: ' . implode(', ', $status['unrelated_tables']) . '. No records or table structures were changed.');
+        if (!$status['ready']) throw new SafeException('Use a fresh FOSSBilling installation, resume the same migration, or explicitly confirm OVERWRITE FOSSBILLING DATA. Unrelated business records were found in: ' . implode(', ', $status['unrelated_tables']) . '. No records or table structures were changed.');
     }
 }

@@ -136,10 +136,14 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
 
     public function destinationStatus(?int $source = null, string $mode = 'archive'): array
     {
-        if (!$this->store()->schemaReady()) return ['ready' => false, 'schema_required' => true, 'unrelated_tables' => []];
+        if (!$this->store()->schemaReady()) return ['ready' => false, 'schema_required' => true, 'unrelated_tables' => [], 'tables' => []];
         if (!in_array($mode, ['archive', 'reference_native', 'historical_native'], true)) throw new SafeException('Unknown migration mode.');
         if ($source !== null) $this->store()->source($source);
-        return \Box\Mod\Whmcstofossbilling\Destination\FreshCheck::check($this->store(), $mode === 'archive' ? null : $source);
+        $scope = $mode === 'archive' ? null : $source;
+        $status = \Box\Mod\Whmcstofossbilling\Destination\FreshCheck::check($this->store(), $scope);
+        $status['tables'] = \Box\Mod\Whmcstofossbilling\Destination\Overwrite::inspect($this->store(), $scope);
+
+        return $status;
     }
 
     public function backup(string $operation, #[\SensitiveParameter] array $input, int $owner): array
@@ -308,7 +312,18 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         if ($mode !== 'dry_run' && (($input['confirmation'] ?? '') !== 'PRESERVE HISTORY' || empty($input['accept_limitations']))) {
             throw new SafeException('Acknowledge the migration limitations and type PRESERVE HISTORY.');
         }
-        if ($mode !== 'dry_run') \Box\Mod\Whmcstofossbilling\Destination\FreshCheck::assertReady($this->store(), $mode === 'archive' ? null : (int) $source['id']);
+        $overwrite = false;
+        if ($mode !== 'dry_run') {
+            $phrase = (string) ($input['overwrite_confirmation'] ?? '');
+            $acknowledged = !empty($input['overwrite_acknowledged']);
+            if ($phrase !== '' && !$acknowledged) throw new SafeException('Confirm the destructive overwrite checkbox before typing the overwrite phrase.');
+            if ($acknowledged && $phrase !== \Box\Mod\Whmcstofossbilling\Destination\Overwrite::CONFIRMATION) throw new SafeException('Type OVERWRITE FOSSBILLING DATA exactly to overwrite existing FOSSBilling records.');
+            $fresh = \Box\Mod\Whmcstofossbilling\Destination\FreshCheck::check($this->store(), $mode === 'archive' ? null : (int) $source['id']);
+            if (!$fresh['ready'] && $phrase !== \Box\Mod\Whmcstofossbilling\Destination\Overwrite::CONFIRMATION) {
+                throw new SafeException('Use a fresh FOSSBilling installation, resume the same migration, or explicitly confirm OVERWRITE FOSSBILLING DATA to permanently delete the unrelated business records found in: ' . implode(', ', $fresh['unrelated_tables']) . '. No records or table structures were changed.');
+            }
+            $overwrite = $acknowledged && $phrase === \Box\Mod\Whmcstofossbilling\Destination\Overwrite::CONFIRMATION;
+        }
         if ($mode === 'historical_native' && empty($input['destination_exclusive'])) throw new SafeException('Historical financial publication requires explicit confirmation of an otherwise idle, private destination. This tool does not disable global automation.');
         $invalidFallback = (string) ($input['invalid_date_fallback'] ?? '');
         if ($invalidFallback !== '' && $invalidFallback !== '1900') {
@@ -368,7 +383,11 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
             }
             if (isset($plan['source_backup_id'])) \Box\Mod\Whmcstofossbilling\Source\ReaderFactory::open($options)->inspect();
             $store->pdo->beginTransaction();
-            $store->execute('INSERT INTO whmcstofossbilling_run (id,source_id,status,mode,schema_json,mapping_json,plan_json,owner_id,backup_reference,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())', [$id, $source['id'], 'paused', $mode, Store::json($schema), Store::json($profile), Store::json($plan), $admin, $mode === 'dry_run' ? 'dry run' : 'Fresh installation / migration-owned records verified']);
+            $reset = $overwrite ? \Box\Mod\Whmcstofossbilling\Destination\Overwrite::apply($store) : null;
+            $plan['destination_overwrite'] = $reset;
+            $backupReference = $mode === 'dry_run' ? 'dry run'
+                : ($reset === null ? 'Fresh installation / migration-owned records verified' : 'Confirmed destructive overwrite of blocking FOSSBilling records');
+            $store->execute('INSERT INTO whmcstofossbilling_run (id,source_id,status,mode,schema_json,mapping_json,plan_json,owner_id,backup_reference,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())', [$id, $source['id'], 'paused', $mode, Store::json($schema), Store::json($profile), Store::json($plan), $admin, $backupReference]);
             foreach ($plan['tables'] as $table => $bounds) {
                 $store->execute('INSERT INTO whmcstofossbilling_cursor (run_id,table_name,expected,maximum) VALUES (?,?,?,?)', [$id, $table, $bounds['count'], $bounds['maximum']]);
             }

@@ -41,7 +41,7 @@ This extension is **vibe coded**. It requires independent security review and di
 
 ## Installation
 
-1. Use a fresh FOSSBilling installation with no unrelated business records. Previously imported records from the same migration can be resumed.
+1. Use a fresh FOSSBilling installation with no unrelated business records. Previously imported records from the same migration can be resumed. If the installation must be reused, the authorization form offers an explicit irreversible overwrite that deletes every row in the checked business tables, including leftovers from failed migrations.
 2. Place this directory at `modules/Whmcstofossbilling/` — exact capitalization matters on Linux.
 3. Use the PHP runtime serving FOSSBilling, **PHP 8.3+**, with PDO MySQL, OpenSSL, BCMath, Mbstring and JSON. Backup uploads require 64-bit PHP; compressed backups also require zlib. ZipArchive is not required.
 4. Log in at your FOSSBilling admin URL.

@@ -140,9 +140,11 @@ API is verified to return `Authentication Failed`/201 before source access.
   needs to continue in this tab. Hidden tabs skip status reads; navigation,
   processing in this tab and errors stop observation.
 - Cancellation/replacement is an explicit confirmed action. Previously imported
-  records and preserved evidence are never deleted or rolled back. The new run
-  uses the current reviewed form and still passes the normal authorization and
-  planner gates. Changes during cancellation require another review.
+  records and preserved evidence are never deleted or rolled back unless the
+  administrator separately supplies the irreversible overwrite confirmation in
+  the reviewed form. The new run uses the current reviewed form and still passes
+  the normal authorization and planner gates. Changes during cancellation require
+  another review.
 - The source lock and overlapping-run guard remain unchanged. If another tab
   creates a run between the early lookup and creation, the wizard opens that
   existing run rather than retrying writes or cancelling it automatically.
@@ -175,8 +177,14 @@ API is verified to return `Authentication Failed`/201 before source access.
   is frozen into the plan; required source files cannot be removed during an
   unfinished run. Explicit cleanup retains imported/archive evidence.
 - Fresh-install/ownership checks replace mandatory destination backup fields.
-  Unrelated business records block authorization without deletion or alteration.
-  Existing same-source migration-owned records can be resumed. Idle/private
+  Unrelated business records block authorization by default without deletion or
+  alteration. Existing same-source migration-owned records can be resumed. When
+  a destination must be reused, the authorization form can show per-table row
+  counts and require an irreversible `OVERWRITE FOSSBILLING DATA` acknowledgement:
+  every row in the checked business tables is deleted in the same transaction
+  that creates the new paused run, stale identity mappings are cleared, and
+  table structures/reference records are untouched. Failed-migration leftovers
+  are covered because the reset is not limited to tracked records. Idle/private
   historical-finance confirmation and all native safety restrictions remain.
 - SQL import supports a conservative UTF-8 CREATE/INSERT subset with positive
   integer keys, not arbitrary SQL engines or every provider's dump syntax.

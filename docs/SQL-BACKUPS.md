@@ -18,8 +18,12 @@ checks core business rows against migration identities before authorizing native
 work. Defaults such as currencies/helpdesks are allowed. A native run from a
 different source cannot duplicate existing migration-owned business rows. Archive-
 only runs can preserve additional sources without creating native business rows.
-Unrelated records block authorization; nothing is deleted to make the site fresh.
-This check does not isolate an independently running cron or another writer.
+Unrelated records block authorization by default; nothing is deleted to make the
+site fresh. The authorization form can instead offer an explicit irreversible
+overwrite: after checkbox and exact `OVERWRITE FOSSBILLING DATA` confirmation, all
+rows in the checked business tables are deleted atomically with creation of the
+new paused run, including failed-migration leftovers. This check does not isolate
+an independently running cron or another writer.
 
 ## Supported export format
 
