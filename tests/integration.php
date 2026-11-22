@@ -544,14 +544,36 @@ try {
         rejects(fn () => \Box\Mod\Whmcstofossbilling\Destination\FreshCheck::assertReady($store), 'Fresh-install guard fails closed without deleting or changing business data');
     } finally { $store->pdo->rollBack(); }
     // Export only SYNTHETIC fixture rows, then consume the dump without executing it.
-    $dump = "SET NAMES utf8mb4;\n";
+    $rocksPreamble = <<<'SQL'
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET NAMES utf8mb4 */;
+/*!50717 SELECT COUNT(*) INTO @rocksdb_has_p_s_session_variables FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'performance_schema' AND TABLE_NAME = 'session_variables' */;
+/*!50717 SET @rocksdb_get_is_supported = IF (@rocksdb_has_p_s_session_variables, 'SELECT COUNT(*) INTO @rocksdb_is_supported FROM performance_schema.session_variables WHERE VARIABLE_NAME=\'rocksdb_bulk_load\'', 'SELECT 0') */;
+/*!50717 PREPARE s FROM @rocksdb_get_is_supported */;
+/*!50717 EXECUTE s */;
+/*!50717 DEALLOCATE PREPARE s */;
+/*!50717 SET @rocksdb_enable_bulk_load = IF (@rocksdb_is_supported, 'SET SESSION rocksdb_bulk_load = 1', 'SET @rocksdb_dummy_bulk_load = 0') */;
+/*!50717 PREPARE s FROM @rocksdb_enable_bulk_load */;
+/*!50717 EXECUTE s */;
+/*!50717 DEALLOCATE PREPARE s */;
+SQL;
+    $rocksEpilogue = <<<'SQL'
+/*!50112 SET @disable_bulk_load = IF (@is_rocksdb_supported, 'SET SESSION rocksdb_bulk_load = @old_rocksdb_bulk_load', 'SET @dummy_rocksdb_bulk_load = 0') */;
+/*!50112 PREPARE s FROM @disable_bulk_load */;
+/*!50112 EXECUTE s */;
+/*!50112 DEALLOCATE PREPARE s */;
+/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
+SQL;
+    $dump = "-- Synthetic WHMCS SQL source; never executed\n" . $rocksPreamble . "\n";
     foreach (['tblclients', 'tblproducts', 'tblhosting', 'tblinvoices', 'tblinvoiceitems', 'tblaccounts', 'tblconfiguration', 'tblcurrencies', 'tblclientgroups'] as $name) {
         $definition = $admin->query("SHOW CREATE TABLE `$sourceDb`.`$name`")->fetch();
         $dump .= $definition['Create Table'] . ";\n";
-        foreach ($admin->query("SELECT * FROM `$sourceDb`.`$name` ORDER BY id") as $record) {
+        // Deliberately reverse physical row order; preparation must index by key.
+        foreach ($admin->query("SELECT * FROM `$sourceDb`.`$name` ORDER BY id DESC") as $record) {
             $dump .= "INSERT INTO `$name` VALUES (" . implode(',', array_map(static fn ($value) => $value === null ? 'NULL' : $admin->quote((string) $value), array_values($record))) . ");\n";
         }
     }
+    $dump .= $rocksEpilogue . "\n";
     $upload = $service->backup('begin', ['filename' => 'synthetic.sql', 'size' => strlen($dump), 'source_timezone' => 'UTC'], 1);
     $dumpJobId = $upload['backup_id'];
     for ($offset = 0; $offset < strlen($dump); $offset += $upload['chunk_size']) $service->backup('chunk', ['backup_id' => $dumpJobId, 'offset' => $offset, 'data' => base64_encode(substr($dump, $offset, $upload['chunk_size']))], 1);

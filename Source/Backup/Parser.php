@@ -13,14 +13,17 @@ final class Parser
 {
     private array $buffers = [];
     private array $lengths = [];
+    private array $indexBuffers = [];
+    private array $indexLengths = [];
     private int $bufferBytes = 0;
+    private int $indexBufferBytes = 0;
     public function __construct(private string $directory, private string $key) {}
 
     /** One bounded step; cursor is always between SQL statements or complete INSERT tuples. */
     public function step(array &$state): void
     {
         $stream = EncryptedFile::open($this->directory . '/' . $state['sql_file'], $this->key);
-        $lexer = new Lexer($stream, $state['offset']);
+        $lexer = new Lexer($stream, $state['offset'], (string) ($state['probe'] ?? 'none'));
         $started = microtime(true);
         try {
             do {
@@ -83,10 +86,14 @@ final class Parser
                 }
                 $state['offset'] = $lexer->offset();
             } while (microtime(true) - $started < 3 && $state['phase'] === 'parse');
-            foreach (array_keys($this->buffers) as $name) $this->flush($name);
-            foreach ($state['tables'] as $name => &$table) $table['bytes'] = EncryptedFile::size($this->directory . '/' . $name . '.rows');
+            foreach (array_unique(array_merge(array_keys($this->buffers), array_keys($this->indexBuffers))) as $name) $this->flush($name);
+            foreach ($state['tables'] as $name => &$table) {
+                $table['bytes'] = EncryptedFile::size($this->directory . '/' . $name . '.rows');
+                $table['index_bytes'] = EncryptedFile::size($this->directory . '/' . $name . '.index');
+            }
             unset($table);
             $state['offset'] = $lexer->offset();
+            $state['probe'] = $lexer->probeState();
         } finally { fclose($stream); }
     }
 
@@ -127,7 +134,7 @@ final class Parser
             if (count($part) > 4096 || count($parts) > 1000) throw new SafeException('Table definition exceeds the supported limit.');
         }
         $this->statement($lexer);
-        $table = ['columns' => [], 'primary' => [], 'key' => null, 'count' => 0, 'maximum' => '0', 'index' => []];
+        $table = ['columns' => [], 'primary' => [], 'key' => null, 'count' => 0, 'maximum' => '0', 'bytes' => 0, 'index_bytes' => 0];
         foreach ($parts as $part) {
             // Defaults and ENUM strings are values, never metadata keywords.
             $text = implode(' ', array_column(array_values(array_filter($part, static fn (array $token): bool => $token[0] !== 'string')), 1));
@@ -180,19 +187,25 @@ final class Parser
         $suffix = substr($name, strlen($state['prefix']));
         if (!str_starts_with($name, $state['prefix']) || Sensitive::table($suffix) || !Catalog::known($suffix) || in_array($suffix, ['customfieldsvalues', 'addonmodules', 'domainlog', 'ticketmaillog', 'emailtemplates'], true) || !$table['key'] || !in_array($table['columns'][$table['key']]['data_type'] ?? '', ['tinyint', 'smallint', 'mediumint', 'int', 'bigint'], true)) return;
         $key = (string) ($row[$table['key']] ?? '');
-        if (!ctype_digit($key) || strlen($key) > 30 || bccomp($key, $table['maximum'], 0) <= 0) throw new SafeException('Source keys in ' . $name . ' must be positive, unique and in primary-key order. Re-export this table ordered by its integer primary key.');
+        if (!ctype_digit($key) || strlen($key) > 30 || bccomp($key, '0', 0) <= 0) throw new SafeException('Source keys in ' . $name . ' must be positive integers. Zero, negative and non-integer keys cannot identify preserved records.');
+        $key = ltrim($key, '0');
+        if ($key === '') $key = '0';
+        if (bccomp($key, $table['maximum'], 0) > 0) $table['maximum'] = $key;
         try { $data = json_encode($row, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE) . "\n"; }
         catch (\JsonException) { throw new SafeException('Backup contains binary or non-UTF-8 values in ' . $name . '. Export UTF-8 data or use a reviewed binary extractor. No invalid bytes were replaced.'); }
         if (strlen($data) > 4194304 || max(array_map(static fn ($value): int => strlen((string) $value), $row)) > 2097152) $data = json_encode([$table['key'] => $key, '__wm_oversized' => 1], JSON_THROW_ON_ERROR) . "\n";
         $path = $this->directory . '/' . $name . '.rows';
         $this->lengths[$name] ??= EncryptedFile::size($path);
         $offset = $this->lengths[$name] + strlen($this->buffers[$name] ?? '');
-        if ($table['count'] % 128 === 0) $table['index'][] = [$key, $offset];
+        $record = KeyIndex::encode($key, $offset);
+        $this->indexLengths[$name] ??= EncryptedFile::size($this->directory . '/' . $name . '.index');
         $this->buffers[$name] = ($this->buffers[$name] ?? '') . $data;
         $this->bufferBytes += strlen($data);
-        if (strlen($this->buffers[$name]) >= 1048576) $this->flush($name);
-        if ($this->bufferBytes >= 4194304) foreach (array_keys($this->buffers) as $pending) $this->flush($pending);
-        ++$table['count']; $table['maximum'] = $key;
+        $this->indexBuffers[$name] = ($this->indexBuffers[$name] ?? '') . $record;
+        $this->indexBufferBytes += strlen($record);
+        if (strlen($this->buffers[$name]) >= 1048576 || strlen($this->indexBuffers[$name]) >= 1048576) $this->flush($name);
+        if ($this->bufferBytes >= 4194304 || $this->indexBufferBytes >= 4194304) foreach (array_unique(array_merge(array_keys($this->buffers), array_keys($this->indexBuffers))) as $pending) $this->flush($pending);
+        ++$table['count'];
     }
 
     private function flush(string $name): void
@@ -203,6 +216,12 @@ final class Parser
             $this->bufferBytes -= strlen($this->buffers[$name]);
         }
         unset($this->buffers[$name]);
+        if (($this->indexBuffers[$name] ?? '') !== '') {
+            EncryptedFile::append($this->directory . '/' . $name . '.index', $this->key, $this->indexBuffers[$name]);
+            $this->indexLengths[$name] += strlen($this->indexBuffers[$name]);
+            $this->indexBufferBytes -= strlen($this->indexBuffers[$name]);
+        }
+        unset($this->indexBuffers[$name]);
     }
 
     private function finish(array &$state): void
@@ -214,6 +233,6 @@ final class Parser
         $state['schema'] = Reader::fromColumns($columns, $state['prefix']);
         if ($state['version'] !== null && !str_starts_with($state['version'], '8.')) throw new SafeException('The backup version is not WHMCS 8.x.');
         if ($state['version'] === null && !$state['confirmed_whmcs8']) throw new SafeException('Version was not detected. Verify WHMCS 8.x and upload with the manual version confirmation.');
-        $state['phase'] = 'ready';
+        $state['phase'] = 'sort'; // Encrypted key/offset index is sorted in bounded steps before use.
     }
 }

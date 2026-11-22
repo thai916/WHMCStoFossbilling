@@ -7,9 +7,9 @@
 3. Set the actual WHMCS/PHP application timezone (the suggestion is America/Chicago).
    Expand **Backup details** only if a custom prefix or manual WHMCS 8.x
    confirmation is needed.
-4. Click **Upload & prepare backup**. Upload, decompression, integrity verification
-   and table parsing are separate visible stages. Only stages with measurable
-   byte totals display a percentage.
+4. Click **Upload & prepare backup**. Upload, decompression, integrity verification,
+   table parsing and record-index ordering are separate visible stages. Only
+   stages with measurable byte totals display a percentage.
 5. Review mappings/exclusions, create and resume a preview, then authorize a
    reviewed migration. A prepared file is not an imported client history.
 
@@ -28,12 +28,14 @@ This check does not isolate an independently running cron or another writer.
 - Backtick identifiers, MySQL-escaped or doubled quoted strings, NULL, decimal/
   integer literals, small hexadecimal literals, complete INSERT column lists,
   multiline strings and extended multi-row INSERT statements.
-- Single positive integer primary keys in increasing order per table. Gaps are
-  fine; duplicates, zero/negative or out-of-order keys stop preparation rather
-  than losing records. Export in primary-key order if necessary.
+- Single positive integer primary keys per table. Gaps and out-of-order INSERT
+  rows are fine; the importer builds a sorted key/offset index. Duplicates and
+  zero/negative/non-integer keys still stop preparation rather than losing rows.
 - CREATE primary keys and supported phpMyAdmin late ADD PRIMARY KEY metadata.
-  Late column/type changes, arbitrary expressions/default-value INSERTs, routines,
-  nonstandard SQL modes/encodings and unrecognized executable comments are refused.
+  Ordinary executable SET/ALTER KEY metadata and the exact MySQL 5.7 RocksDB
+  capability-probe preamble/epilogue are allowed. Late column/type changes,
+  arbitrary expressions/default-value INSERTs, routines, nonstandard SQL modes/
+  encodings and every other executable comment are refused.
 - Standard stored/deflated ZIP and ZIP64 directory/member sizes. No password-
   protected ZIP, split ZIP, nested archives, TAR.GZ, multiple SQL members or
   concatenated GZIP streams. Archive names are never extracted to filesystem paths.
@@ -57,8 +59,11 @@ feature adds no new SQL tables or schema patches.
   entire upload into PHP/browser memory or depending on upload_max_filesize for
   the whole backup. A failed block can be retried idempotently in the same page.
 - Preparation checkpoints between complete INSERT tuples. Large extended INSERTs
-  are not loaded as one statement. Encrypted table files use sparse key indexes
-  and binary search for migration cursors.
+  are not loaded as one statement. Every stored row gets a fixed-width encrypted
+  `(key, offset)` record; a bounded external sort/checkpoint pass orders that
+  index, and migration cursors binary-search it before seeking each row.
+- SQL files prepared by an earlier 0.2 build must be uploaded again: they do not
+  contain the new final `.sorted` index and cannot be silently reused.
 - Expanded data and row buffers are bounded. Individual token/row/archive limits
   remain; binary/invalid UTF-8 and unsupported large-object cases are refused or
   explicitly marked oversized, never silently truncated.
@@ -102,9 +107,11 @@ feature adds no new SQL tables or schema patches.
 
 ## Verification boundaries
 
-Synthetic tests cover SQL/GZIP/ZIP/ZIP64, extended INSERTs, Unicode/escaping,
-late keys, upload replay, owner checks, excluded secrets, corruption/traversal/
-truncation, CRC composition, sparse seeks and multi-block compressed data.
+Synthetic tests cover SQL/GZIP/ZIP/ZIP64, extended INSERTs, RocksDB probe
+comments, out-of-order rows, sorted-index order, multi-run external merge,
+Unicode/escaping, late keys, upload replay, owner checks, excluded secrets,
+corruption/traversal/truncation, CRC composition, sparse seeks and multi-block
+compressed data.
 Disposable MySQL tests exercise the actual archive engine and native client
 import into a separately fresh FOSSBilling-schema fixture, core schema stability,
 no email queue, fresh-install blocking and protected cleanup.

@@ -165,18 +165,25 @@ API is verified to return `Authentication Failed`/201 before source access.
 - SQL is tokenized as data, never executed. No staging database, shell command,
   Composer dependency or core-schema modification is used. Encrypted seekable
   row files feed the existing resumable engine, including native client imports.
+- Row order in the dump no longer needs to match primary-key order. A bounded,
+  checkpointed external sort builds an encrypted `(key, offset)` index for every
+  table; duplicate or invalid keys still fail closed. The exact MySQL 5.7 RocksDB
+  capability-probe comments found in the reported backup are allowed; altered
+  probes and every other executable comment are rejected.
 - Backups/checkpoints are authenticated and encrypted at rest. Ownership, path/
-  ZIP traversal, CRC, size, ordering and syntax checks fail closed. Source identity
+  ZIP traversal, CRC, size and syntax checks fail closed. Source identity
   is frozen into the plan; required source files cannot be removed during an
   unfinished run. Explicit cleanup retains imported/archive evidence.
 - Fresh-install/ownership checks replace mandatory destination backup fields.
   Unrelated business records block authorization without deletion or alteration.
   Existing same-source migration-owned records can be resumed. Idle/private
   historical-finance confirmation and all native safety restrictions remain.
-- SQL import supports a conservative UTF-8 CREATE/INSERT subset with increasing
-  positive integer keys, not arbitrary SQL engines or every provider's dump
-  syntax. Limits are 64 GiB upload / 128 GiB expansion, subject to disk/server
-  resources; real multi-gigabyte upload/throughput is not yet established.
+- SQL import supports a conservative UTF-8 CREATE/INSERT subset with positive
+  integer keys, not arbitrary SQL engines or every provider's dump syntax.
+  Files prepared by an earlier 0.2 build must be uploaded again because they
+  lack the final sorted index. Limits are 64 GiB upload / 128 GiB expansion,
+  subject to disk/server resources; real multi-gigabyte upload/throughput is
+  not yet established.
 
 Read [SQL backup requirements](SQL-BACKUPS.md). Keep the page open for unfinished
 uploads and preserve `.local/backups/`, its installation path and the installation

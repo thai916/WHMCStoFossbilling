@@ -9,15 +9,35 @@ use Box\Mod\Whmcstofossbilling\Security\SafeException;
 /** MySQL dump tokenizer, never a SQL executor. Extended INSERTs are read one tuple at a time. */
 final class Lexer
 {
+    private const PROBE_SELECT = "SELECT COUNT(*) INTO @rocksdb_has_p_s_session_variables FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'performance_schema' AND TABLE_NAME = 'session_variables'";
+    private const PROBE_SET_GET = "SET @rocksdb_get_is_supported = IF (@rocksdb_has_p_s_session_variables, 'SELECT COUNT(*) INTO @rocksdb_is_supported FROM performance_schema.session_variables WHERE VARIABLE_NAME=\\'rocksdb_bulk_load\\'', 'SELECT 0')";
+    private const PROBE_SET_ENABLE = "SET @rocksdb_enable_bulk_load = IF (@rocksdb_is_supported, 'SET SESSION rocksdb_bulk_load = 1', 'SET @rocksdb_dummy_bulk_load = 0')";
+    private const PROBE_SET_DISABLE = "SET @disable_bulk_load = IF (@is_rocksdb_supported, 'SET SESSION rocksdb_bulk_load = @old_rocksdb_bulk_load', 'SET @dummy_rocksdb_bulk_load = 0')";
+
+    /** Exact executable comments emitted by MySQL 5.7 RocksDB capability probes. */
+    private const PROBE_STAGES = [
+        self::PROBE_SELECT => 'select',
+        self::PROBE_SET_GET => 'set_get',
+        'PREPARE s FROM @rocksdb_get_is_supported' => 'prepare_get',
+        self::PROBE_SET_ENABLE => 'set_enable',
+        'PREPARE s FROM @rocksdb_enable_bulk_load' => 'prepare_enable',
+        self::PROBE_SET_DISABLE => 'set_disable',
+        'PREPARE s FROM @disable_bulk_load' => 'prepare_disable',
+        'EXECUTE s' => 'execute',
+        'DEALLOCATE PREPARE s' => 'deallocate',
+    ];
+
     private string $buffer = '';
     private int $at = 0;
     private int $offset;
     private ?array $lookahead = null;
-    public function __construct(private $stream, int $offset = 0) {
+    private string $probe;
+    public function __construct(private $stream, int $offset = 0, string $probe = 'none') {
         if ($offset === 0 && fread($stream, 3) === "\xef\xbb\xbf") $offset = 3;
-        fseek($stream, $offset); $this->offset = $offset;
+        fseek($stream, $offset); $this->offset = $offset; $this->probe = $probe;
     }
     public function offset(): int { return $this->lookahead[2] ?? $this->offset; }
+    public function probeState(): string { return $this->probe; }
     private function char(): string
     {
         if ($this->at >= strlen($this->buffer)) { $this->buffer = fread($this->stream, 65536); $this->at = 0; }
@@ -45,6 +65,53 @@ final class Lexer
             }
         }
     }
+    /** Ordinary backup SET/ALTER metadata stays supported; prepared-statement probes must match an exact sequence. */
+    private function executableComment(string $statement): bool
+    {
+        // The comment scanner leaves the first '*' of the closing '*/' in the body.
+        $statement = (string) preg_replace('/\s*\*\z/', '', rtrim($statement));
+        $normalized = strtolower(preg_replace('/\s+/', ' ', $statement) ?? '');
+        $stages = array_change_key_case(self::PROBE_STAGES, CASE_LOWER);
+        if (isset($stages[$normalized])) {
+            $stage = $stages[$normalized];
+            switch ($stage) {
+                case 'select': $this->probe = 'set_get'; return true;
+                case 'set_get':
+                    if ($this->probe !== 'set_get') break;
+                    $this->probe = 'prepare_get'; return true;
+                case 'prepare_get':
+                    if ($this->probe !== 'prepare_get') break;
+                    $this->probe = 'executing_get'; return true;
+                case 'set_enable':
+                    if ($this->probe !== 'deallocated') break;
+                    $this->probe = 'prepare_enable'; return true;
+                case 'prepare_enable':
+                    if ($this->probe !== 'prepare_enable') break;
+                    $this->probe = 'executing_enable'; return true;
+                case 'set_disable':
+                    if ($this->probe !== 'deallocated') break;
+                    $this->probe = 'prepare_disable'; return true;
+                case 'prepare_disable':
+                    if ($this->probe !== 'prepare_disable') break;
+                    $this->probe = 'executing_disable'; return true;
+                case 'execute':
+                    if (!str_starts_with($this->probe, 'executing_')) break;
+                    return true;
+                case 'deallocate':
+                    if (!str_starts_with($this->probe, 'executing_')) break;
+                    $this->probe = 'deallocated'; return true;
+            }
+            throw new SafeException('Unsupported executable SQL comment. Export ordinary table definitions and INSERT statements so no history is silently omitted.');
+        }
+        if (preg_match('/\A(?:SET\b|ALTER\s+TABLE\s+[`A-Za-z0-9_]+\s+(?:ENABLE|DISABLE)\s+KEYS\b)/i', $statement)) {
+            // Ordinary dump SET metadata between completed probes is harmless; a
+            // SET inserted inside a probe sequence must invalidate the sequence.
+            if (!in_array($this->probe, ['none', 'deallocated'], true)) $this->probe = 'none';
+            return true;
+        }
+        throw new SafeException('Unsupported executable SQL comment. Export ordinary table definitions and INSERT statements so no history is silently omitted.');
+    }
+
     private function token(): array
     {
         while (true) {
@@ -71,7 +138,7 @@ final class Lexer
                 if (preg_match('/\A(?:!|M!)/i', $comment)) {
                     self::assertMetadata($comment);
                     $statement = preg_replace('/\A(?:M!|!)\d*\s*/i', '', $comment);
-                    if (!preg_match('/\A(?:SET\b|ALTER\s+TABLE\s+[`A-Za-z0-9_]+\s+(?:ENABLE|DISABLE)\s+KEYS\b)/i', $statement)) throw new SafeException('Unsupported executable SQL comment. Export ordinary table definitions and INSERT statements so no history is silently omitted.');
+                    $this->executableComment((string) $statement);
                 }
                 continue;
             }

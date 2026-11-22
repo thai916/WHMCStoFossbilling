@@ -220,6 +220,7 @@
         else if (phase === "parse") { percent = data.sql_size > 0 ? Math.min(100, Math.floor(data.parsed / data.sql_size * 100)) : 0; text = `Reading WHMCS tables · ${percent}% · ${data.tables} definitions found`; }
         else if (phase === "expand") text = `Opening compressed backup · ${Math.floor(data.expanded / 1048576)} MiB prepared`;
         else if (phase === "verify") text = "Checking compressed backup integrity…";
+        else if (phase === "sort") text = "Ordering backup record index…";
         else { percent = 100; text = "Backup is ready. Review the mappings before creating a migration run."; }
         $("upload-status").textContent = text;
         $("upload-progress").classList.remove("d-none");

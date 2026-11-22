@@ -64,7 +64,7 @@ const requests = [];
 const testedModes = [];
 const batchRequestIds = [];
 let uploadedBytes = 0, uploadTotal = 0, backupPreparations = 0;
-let backupChunkGate = null;
+let backupChunkGate = null, backupSortGate = null;
 const server = http.createServer((request, response) => {
     const item = content[request.url];
     if (!item) { response.writeHead(404); response.end(); return; }
@@ -98,7 +98,8 @@ const server = http.createServer((request, response) => {
                     result = { backup_id: "d".repeat(32), phase: "upload", uploaded: uploadedBytes, size: uploadTotal, expanded: 0, parsed: 0, sql_size: 0, tables: 0 }; break;
                 case "backup_prepare":
                     ++backupPreparations;
-                    result = { backup_id: "d".repeat(32), phase: backupPreparations === 1 ? "expand" : backupPreparations === 2 ? "parse" : "ready", uploaded: uploadedBytes, size: uploadTotal, expanded: uploadTotal, parsed: uploadTotal, sql_size: uploadTotal, tables: 43 }; break;
+                    if (backupPreparations === 4 && backupSortGate) { const pending = backupSortGate; backupSortGate = null; await pending; }
+                    result = { backup_id: "d".repeat(32), phase: backupPreparations === 1 ? "expand" : backupPreparations === 2 ? "parse" : backupPreparations === 3 ? "sort" : "ready", uploaded: uploadedBytes, size: uploadTotal, expanded: uploadTotal, parsed: uploadTotal, sql_size: uploadTotal, tables: 43 }; break;
                 case "backup_source": result = { ...source, source_kind: "sql_file", backup_id: "d".repeat(32), connection_status: null, label: "Uploaded WHMCS SQL backup" }; break;
                 case "backup_remove": assert.equal(data.confirmation, "REMOVE PRIVATE BACKUP"); result = { removed: true }; break;
                 case "dashboard": result = { schema_upgrade_required: schemaUpgradeRequired, environment: { blockers: source.blockers }, sources: [{ id: 1, label: source.label, tested_at: "2026-01-01" }], runs: [{ id: historicalRunId, created_at: "2026-01-01", mode: "historical_native", status: "requires_action", label: "synthetic history" }] }; break;
@@ -541,7 +542,12 @@ const server = http.createServer((request, response) => {
         releaseUpload();
         await page.getByRole("button", { name: "Continue upload", exact: true }).waitFor();
         assert.ok(uploadedBytes > 0 && uploadedBytes < 700000, "Pausing preserves the completed block without splitting files manually");
+        let releaseSort;
+        backupSortGate = new Promise(resolve => { releaseSort = resolve; });
         await page.locator("#wm-upload-start").click();
+        await page.waitForFunction(() => document.getElementById("wm-upload-status").textContent.includes("Ordering backup record index"));
+        assert.match(await page.locator("#wm-upload-status").innerText(), /Ordering backup record index/, "Index ordering is shown as a separate preparation phase");
+        releaseSort();
         await page.waitForFunction(() => !document.getElementById("wm-upload-next").disabled);
         assert.equal(uploadedBytes, 700000, "One selected large file is transmitted intact through internal bounded requests");
         assert.equal(requests.filter(name => name === "test_connection").length, connectionsBeforeUpload, "SQL upload never opens a WHMCS database connection");

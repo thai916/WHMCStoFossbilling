@@ -79,7 +79,9 @@ unfinished upload requires a new upload. Prepared sources are saved normally.
 
 Files are encrypted at rest. The bounded parser reads UTF-8 table definitions and
 plain INSERT VALUES tuples, builds encrypted seekable files and never executes
-uploaded SQL. There is no staging database. See [SQL backup requirements and limits](docs/SQL-BACKUPS.md).
+uploaded SQL. INSERT rows need not be in primary-key order: a checkpointed external
+sort creates the encrypted key/offset index, including for dumps with MySQL 5.7
+RocksDB probe comments. There is no staging database. See [SQL backup requirements and limits](docs/SQL-BACKUPS.md).
 
 ## Safe usage
 
