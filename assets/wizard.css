@@ -71,6 +71,8 @@
 #whmcstofossbilling .wm-preservation-summary span{font-weight:600}
 #whmcstofossbilling .wm-preservation-summary strong{font:1.75rem Consolas,ui-monospace,monospace;margin:.35rem 0}
 #whmcstofossbilling .wm-preservation-summary small{color:var(--tblr-secondary)}
+#whmcstofossbilling .wm-repair-panel{color:var(--tblr-body-color,var(--wm-ink));background:var(--tblr-bg-surface,var(--wm-paper));border-color:var(--tblr-border-color,#dbe0e5)}
+#whmcstofossbilling .wm-repair-panel .alert-heading,#whmcstofossbilling .wm-repair-panel p,#whmcstofossbilling .wm-repair-panel label,#whmcstofossbilling .wm-repair-panel code{color:inherit}
 @media(max-width:1100px){#whmcstofossbilling .wm-table-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:767px){#whmcstofossbilling .wm-review-intro{grid-template-columns:1fr;gap:1rem}#whmcstofossbilling .wm-analysis-actions{align-items:flex-start;flex-direction:column;gap:.75rem}#whmcstofossbilling .wm-analysis-actions p{flex:auto}#whmcstofossbilling .card-body{padding:1rem}}
 @media(max-width:540px){#whmcstofossbilling .wm-table-grid,#whmcstofossbilling .wm-preservation-summary{grid-template-columns:1fr}#whmcstofossbilling .wm-table-toolbar{align-items:stretch;flex-direction:column}#whmcstofossbilling .wm-table-search{flex:auto}#whmcstofossbilling .wm-selection-summary{text-align:left}}

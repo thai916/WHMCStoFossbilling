@@ -164,7 +164,7 @@
                 <button class="btn btn-outline-secondary" id="wm-report-csv" type="button">Export CSV report</button>
             </div>
             <p class="text-muted">Closing this tab stops future requests, not committed work. Reopen, select the run and resume. A cancelled run keeps imported records. There is no destructive automatic rollback.</p>
-            <div id="wm-repair-panel" class="alert alert-light border mt-3">
+            <div id="wm-repair-panel" class="alert border mt-3 wm-repair-panel">
                 <h4 class="alert-heading h5">Repair imported visibility</h4>
                 <p class="small">For records created by this module before the visibility fix, set <code>group_master=1</code> on imported hosting orders and <code>approved=1</code> on eligible paid, canceled or refunded invoices. Only module-owned records for the selected run are changed. Nothing is deleted, re-imported, renumbered or emailed.</p>
                 <label class="form-check"><input id="wm-repair-acknowledged" class="form-check-input" type="checkbox" value="1"><span class="form-check-label">I understand this writes only those two visibility fields to module-owned destination records.</span></label>

@@ -612,6 +612,39 @@ function dashboardFixture() {
         assert.match(await page.locator("#wm-credit-results").innerText(), /Closing balance mismatch/);
         assert.equal(await page.evaluate(() => window.XSS_EXECUTED), undefined, "Financial diagnostics never execute HTML");
         assert.equal(await page.locator("#wm-repair-panel").isVisible(), true, "Step 4 exposes the confirmed visibility repair for imported records");
+        const repairContrast = await page.locator("#wm-repair-panel").evaluate(panel => {
+            const lightness = value => {
+                const ok = value.match(/^ok(?:lab|lch)\(\s*([\d.]+)/);
+                if (ok) return Number(ok[1]);
+                const rgb = value.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/);
+                if (rgb) {
+                    const linear = rgb.slice(1, 4).map(Number).map(channel => {
+                        const s = channel / 255;
+                        return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+                    });
+                    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+                }
+                return null;
+            };
+            const background = lightness(getComputedStyle(panel).backgroundColor);
+            const targets = {
+                panel: panel,
+                heading: panel.querySelector("h4"),
+                description: panel.querySelector("p"),
+                acknowledgement: panel.querySelector("label.form-check span"),
+                instruction: panel.querySelector("label.form-label")
+            };
+            const deltas = {};
+            for (const [name, node] of Object.entries(targets)) {
+                if (!node) continue;
+                const text = lightness(getComputedStyle(node).color);
+                deltas[name] = text === null || background === null ? null : Math.abs(text - background);
+            }
+            return deltas;
+        });
+        for (const [name, delta] of Object.entries(repairContrast)) {
+            assert.ok(delta !== null && delta >= 0.3, `Repair visibility ${name} text contrasts with its background (delta ${delta})`);
+        }
         const repairsBefore = repairRequests.length;
         await page.locator("#wm-repair-visibility").click();
         await page.getByText("Acknowledge the limited field change", { exact: false }).waitFor();
