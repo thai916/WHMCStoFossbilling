@@ -51,6 +51,7 @@ Test connection submits the administrator's selected WHMCS server timezone from 
 2. Refresh the server-side run status.
 3. Resume explicitly when ready.
 4. Review any failed records separately.
+5. Use **Export JSON exceptions** or **Export CSV exceptions** in Step 4. The download contains every failed record for the selected run with its exact message and attempt count; successful attempts are summarized in the table above and are not streamed.
 
 Database connection loss rolls back the currently open destination transaction. Earlier committed records and cursors remain. A killed browser does not reverse committed work.
 

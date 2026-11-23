@@ -66,6 +66,7 @@ const testedModes = [];
 const batchRequestIds = [];
 const driveRequestIds = [];
 const repairRequests = [];
+const reportExportRequests = [];
 const recoveryRequestIds = [];
 let rateLimitNextStatus = false;
 let uploadedBytes = 0, uploadTotal = 0, backupPreparations = 0;
@@ -89,6 +90,7 @@ function dashboardFixture() {
         headless: true, executablePath: process.env.WM_CHROME || "C:/Program Files/Google/Chrome/Application/chrome.exe",
         args: ["--disable-breakpad", "--disable-crash-reporter", "--disable-background-networking", `--crash-dumps-dir=${artifacts}`],
         viewport: { width: 1365, height: 1000 },
+        acceptDownloads: true,
     });
     try {
         const page = await browser.newPage(), errors = [];
@@ -223,6 +225,15 @@ function dashboardFixture() {
                     if (repairGate) { const pending = repairGate; repairGate = null; await pending; }
                     repairRequests.push(data);
                     result = { orders: 2, invoices: 3, changed: 5, run_id: data.run_id, source_id: 0 }; break;
+                case "report_export":
+                    assert.deepEqual(data, { run_id: historicalRunId, format: "json", exceptions_only: true }, "Exception export requests only failed records for the selected run");
+                    reportExportRequests.push(data);
+                    await route.fulfill({
+                        status: 200, contentType: "application/json",
+                        headers: { "Content-Disposition": `attachment; filename="whmcstofossbilling-${data.run_id}-exceptions.json"` },
+                        body: JSON.stringify({ summary: { scope: "failed_records_only", run_id: data.run_id }, records: [{ table_name: "tblinvoices", source_key: "17", status: "failed", message: "Synthetic dependency failure", attempts: 1, destinations: [] }] })
+                    });
+                    return;
                 case "run_batch":
                     assert.match(data.request_id, /^[a-f0-9]{32}$/, "Batch idempotency key stays 32 lowercase hex characters without randomUUID");
                     batchRequestIds.push(data.request_id);
@@ -612,6 +623,26 @@ function dashboardFixture() {
         assert.ok(financialRows.some(row => row.includes("EUR") && row.includes("Not represented")), "Missing native value is not rendered as zero");
         assert.match(await page.locator("#wm-credit-results").innerText(), /Closing balance mismatch/);
         assert.equal(await page.evaluate(() => window.XSS_EXECUTED), undefined, "Financial diagnostics never execute HTML");
+        await page.evaluate(() => {
+            window.__wmOriginalTimeout = AbortSignal.timeout;
+            window.__wmTimeouts = [];
+            AbortSignal.timeout = ms => { window.__wmTimeouts.push(ms); return window.__wmOriginalTimeout(ms); };
+        });
+        const [exceptionDownload] = await Promise.all([
+            page.waitForEvent("download"),
+            page.locator("#wm-report-json").click()
+        ]);
+        assert.equal(exceptionDownload.suggestedFilename(), `whmcstofossbilling-${historicalRunId}-exceptions.json`, "Exception export downloads a run-scoped file");
+        let exceptionBody = "";
+        for await (const chunk of await exceptionDownload.createReadStream()) exceptionBody += chunk.toString();
+        const exceptionPayload = JSON.parse(exceptionBody);
+        assert.equal(exceptionPayload.summary.scope, "failed_records_only", "Exception export declares its failed-only scope");
+        assert.equal(exceptionPayload.records[0].table_name, "tblinvoices", "Exception export contains the failed invoice record");
+        assert.deepEqual(reportExportRequests.at(-1), { run_id: historicalRunId, format: "json", exceptions_only: true }, "Step 4 requests an exception-only export");
+        assert.ok((await page.evaluate(() => window.__wmTimeouts)).includes(120000), "Report downloads use the extended timeout");
+        assert.match(await page.locator("#wm-notice").innerText(), /exception report downloaded/i, "Download outcome is reported beside the status area");
+        assert.equal(await page.locator("#wm-report-json").isDisabled(), false, "Report button is available again after download");
+        await page.evaluate(() => { AbortSignal.timeout = window.__wmOriginalTimeout; delete window.__wmOriginalTimeout; delete window.__wmTimeouts; });
         assert.equal(await page.locator("#wm-repair-panel").isVisible(), true, "Step 4 exposes the confirmed visibility repair for imported records");
         const repairContrast = await page.locator("#wm-repair-panel").evaluate(panel => {
             const lightness = value => {
@@ -727,7 +758,7 @@ function dashboardFixture() {
         await page.screenshot({ path: path.join(artifacts, "mobile.png"), fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile connection page has no horizontal overflow");
         assert.deepEqual(errors, [], "No browser JavaScript errors");
-        console.log("PASS: two-choice source landing; database fields and SQL/GZIP/ZIP upload workflow shown only after selection; single-file upload/pause/continue/progress/cleanup and shared mapping; fresh-install flow without backup-reference fields; responsive desktop/mobile source and review layouts; existing-run recovery, scoped visibility repair, honest progress, session controls, idempotency, privacy and no browser storage");
+        console.log("PASS: two-choice source landing; database fields and SQL/GZIP/ZIP upload workflow shown only after selection; single-file upload/pause/continue/progress/cleanup and shared mapping; fresh-install flow without backup-reference fields; responsive desktop/mobile source and review layouts; existing-run recovery, scoped exception downloads with extended timeout, scoped visibility repair, honest progress, session controls, idempotency, privacy and no browser storage");
 
         // A fresh page load with a non-dry unfinished run must reopen Step 4 with a
         // passive Resume/Take-over prompt. No batch is scheduled until explicit action.

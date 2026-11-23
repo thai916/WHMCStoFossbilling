@@ -160,9 +160,10 @@
                 <button class="btn btn-outline-danger" id="wm-cancel" type="button">Cancel future batches</button>
                 <button class="btn btn-outline-secondary" id="wm-refresh" type="button">Refresh status</button>
                 <button class="btn btn-outline-warning" id="wm-retry" type="button">Retry up to 5 failed records</button>
-                <button class="btn btn-outline-secondary" id="wm-report-json" type="button">Export JSON report</button>
-                <button class="btn btn-outline-secondary" id="wm-report-csv" type="button">Export CSV report</button>
+                <button class="btn btn-outline-secondary" id="wm-report-json" type="button">Export JSON exceptions</button>
+                <button class="btn btn-outline-secondary" id="wm-report-csv" type="button">Export CSV exceptions</button>
             </div>
+            <p class="small text-muted mt-2">Exception exports contain every failed record for the selected run, including the exact reason and attempt count. Successful records are summarized in the table above; they are not streamed into the download.</p>
             <p class="text-muted">Closing this tab stops future requests, not committed work. Reopen, select the run and resume. A cancelled run keeps imported records. There is no destructive automatic rollback.</p>
             <div id="wm-repair-panel" class="alert border mt-3 wm-repair-panel">
                 <h4 class="alert-heading h5">Repair imported visibility</h4>

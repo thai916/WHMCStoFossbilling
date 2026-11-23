@@ -37,7 +37,7 @@ This extension is **vibe coded**. It requires independent security review and di
 - Native closed tickets/opening messages/replies/private notes and redacted plain-text email history, preserving verified event dates without sending email.
 - Separate historical mode: canceled/terminated/fraud hosting history as safe canceled native orders, preserving exact original status in metadata; exactly representable paid/canceled/refunded invoices and lines; processed historical payments/refunds; verified complete client credit aggregates.
 - Resumable decimal-only extracted-baseline/native financial assessments, grouped by currency. Missing native records, currency conflicts, drift and unsupported fees remain exceptions. **Not complete debt/allocation or live-cutover reconciliation.**
-- CSV/JSON reports with identities, all aggregate components and actual assessment totals. Original textual invoice numbers/ticket references are searchable in the private archive.
+- CSV/JSON exception exports with identities, exact failure reasons, attempt counts and actual assessment totals. Large runs stream only failed records, so a million-row scan still produces a downloadable report. Original textual invoice numbers/ticket references are searchable in the private archive.
 - PHP, security, synthetic database integration, native-loader/Twig and synthetic browser tests.
 
 ## Installation
@@ -98,7 +98,7 @@ the file preparation above. The subsequent mapping and migration steps are share
 7. Explicitly resume the paused preview. Review all exceptions.
 8. If the supported scope is appropriate, acknowledge the limitations and type `PRESERVE HISTORY`. The destination must be fresh or contain appropriate migration-owned records; unrelated data is never deleted to make it fresh. Historical financial mode additionally requires confirmation that the destination is private and otherwise idle.
 9. Explicitly resume. Extraction, credit publication and financial assessment all checkpoint across requests. Browser closure stops new scheduling; reopen, select the persisted run and resume.
-10. Inspect archives, credit results and financial exceptions, then export reports. Never describe archive-only records as native imports or snapshot totals as final cutover reconciliation.
+10. Inspect archives, credit results and financial exceptions, then export the JSON/CSV exception report from Step 4. The download contains every failed record for the selected run and no successful attempts. Never describe archive-only records as native imports or snapshot totals as final cutover reconciliation.
 
 ### After a session timeout
 

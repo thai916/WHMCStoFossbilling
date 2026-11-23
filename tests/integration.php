@@ -387,6 +387,12 @@ try {
         $result = $service->batch($financial['id'], bin2hex(random_bytes(16)), 50);
     } while ($result['status'] === 'running');
     expect($result['status'] === 'requires_action', 'Unsupported invoices/payments remain failures, never a complete migration');
+    ob_start();
+    (new \Box\Mod\Whmcstofossbilling\Report\Exporter($service))->response($financial['id'], 'json', true)->sendContent();
+    $exceptionExport = json_decode(ob_get_clean(), true, 128, JSON_THROW_ON_ERROR);
+    expect($exceptionExport['summary']['scope'] === 'failed_records_only', 'Exception export declares that successful records are omitted');
+    expect(count($exceptionExport['records']) > 0, 'Exception export contains every failed record from the run');
+    expect(array_reduce($exceptionExport['records'], static fn (bool $allFailed, array $record): bool => $allFailed && $record['status'] === 'failed', true), 'Exception export contains no successful records');
     $invoice = $store->one('SELECT * FROM invoice');
     expect((int) $store->one('SELECT COUNT(*) AS n FROM invoice')['n'] === 1 && $invoice['nr'] === '003' && $invoice['currency'] === 'EUR', 'Only safely representable invoice publishes natively with its numeric legacy number and currency');
     expect($invoice['created_at'] === '2011-01-01 00:00:00' && $invoice['paid_at'] === '2011-01-05 12:00:00', 'Native invoice preserves original creation and payment dates');
@@ -493,6 +499,10 @@ try {
     $csv = ob_get_clean();
     $csvRows = array_map(static fn (string $line): array => str_getcsv($line, ',', '"', ''), array_filter(explode("\n", trim($csv))));
     expect(count(array_unique(array_map('count', $csvRows))) === 1 && count($csvRows[0]) === 18 && str_contains($csv, 'financial_snapshot'), 'CSV reports have consistent columns and actual currency-specific assessment totals');
+    ob_start();
+    (new \Box\Mod\Whmcstofossbilling\Report\Exporter($service))->response($financial['id'], 'csv', true)->sendContent();
+    $exceptionCsv = ob_get_clean();
+    expect(substr_count($exceptionCsv, "\n") < substr_count($csv, "\n"), 'CSV exception export omits successful record rows');
     $cancel = $service->createRun($runInput + ['mode' => 'dry_run'], 1);
     $service->control($cancel['id'], 'cancel');
     rejects(fn () => $service->control($cancel['id'], 'resume'), 'Cancelled runs cannot restart accidentally');

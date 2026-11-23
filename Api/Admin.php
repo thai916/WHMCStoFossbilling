@@ -187,6 +187,10 @@ final class Admin extends \FOSSBilling\Api\AbstractApi
 
     public function report_export(array $data): Response
     {
-        return $this->guarded('export', fn (): Response => (new Exporter($this->getService()))->response((string) ($data['run_id'] ?? ''), (string) ($data['format'] ?? 'json')));
+        return $this->guarded('export', fn (): Response => (new Exporter($this->getService()))->response(
+            (string) ($data['run_id'] ?? ''),
+            (string) ($data['format'] ?? 'json'),
+            (bool) ($data['exceptions_only'] ?? false)
+        ));
     }
 }

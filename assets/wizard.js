@@ -134,7 +134,7 @@
             response = await fetch(endpoint.href, {
                 method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error",
                 headers: { "Content-Type": "application/json", "X-CSRF-TOKEN": root.dataset.csrf },
-                body: JSON.stringify(data), signal: AbortSignal.timeout(method.startsWith("backup_") ? 120000 : 30000)
+                body: JSON.stringify(data), signal: AbortSignal.timeout(method.startsWith("backup_") || method === "report_export" ? 120000 : 30000)
             });
         } catch (error) {
             if (error.name === "TimeoutError" || error.name === "AbortError") throw error;
@@ -910,7 +910,9 @@
     })));
     ["json", "csv"].forEach(format => $(`report-${format}`).addEventListener("click", handle(async () => {
         if (!run) throw new Error("Select a run first.");
-        download(await api("report_export", { run_id: run.id, format }, true), `whmcstofossbilling-${run.id}.${format}`);
+        const blob = await api("report_export", { run_id: run.id, format, exceptions_only: true }, true);
+        download(blob, `whmcstofossbilling-${run.id}-exceptions.${format}`);
+        notice(`${format.toUpperCase()} exception report downloaded. It contains every failed record for this run, not successful records.`);
     })));
     $("archive-search").addEventListener("submit", handle(async () => {
         if (!source) throw new Error("Select a tested source first.");

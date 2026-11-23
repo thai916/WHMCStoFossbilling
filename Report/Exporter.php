@@ -22,7 +22,7 @@ final class Exporter
         return preg_match('/\A[\s]*[=+@\-\t\r]/', $value) ? "'" . $value : $value;
     }
 
-    public function response(string $runId, string $format): StreamedResponse
+    public function response(string $runId, string $format, bool $exceptionsOnly = false): StreamedResponse
     {
         if (!in_array($format, ['json', 'csv'], true)) {
             throw new SafeException('Reports support JSON and CSV only.');
@@ -36,6 +36,7 @@ final class Exporter
             'limitations' => $run['plan']['blockers'], 'reconciliation' => $run['reconciliation'],
             'count_scope' => 'Counts were captured per table, not from a cross-request consistent snapshot.',
             'preview' => $run['mode'] === 'dry_run',
+            'scope' => $exceptionsOnly ? 'failed_records_only' : 'all_records',
             'product_pricing' => $run['product_pricing'], 'credit_publication' => $run['credit_publication'],
         ];
         $store = $this->service->store();
@@ -50,7 +51,10 @@ final class Exporter
                 $summary['field_dispositions'][] = ['table' => $name, 'field' => $column, 'action' => $rule['action'], 'target' => $rule['target'], 'transform' => $rule['transform']];
             }
         }
-        $response = new StreamedResponse(static function () use ($summary, $store, $runId, $format): void {
+        $attemptQuery = 'SELECT id,table_name,source_key,status,error_type,message,attempts FROM whmcstofossbilling_attempt WHERE run_id=? AND id>?'
+            . ($exceptionsOnly ? " AND status='failed'" : '')
+            . ' ORDER BY id LIMIT 500';
+        $response = new StreamedResponse(static function () use ($summary, $store, $runId, $format, $attemptQuery): void {
             $output = fopen('php://output', 'wb');
             if ($format === 'json') {
                 fwrite($output, '{"summary":' . Store::json($summary) . ',"records":[');
@@ -70,7 +74,7 @@ final class Exporter
             do {
                 // Page attempts, not a one-to-many identity join: an aggregate can map
                 // to multiple destination records without losing children at a page boundary.
-                $records = $store->all('SELECT id,table_name,source_key,status,error_type,message,attempts FROM whmcstofossbilling_attempt WHERE run_id=? AND id>? ORDER BY id LIMIT 500', [$runId, $after]);
+                $records = $store->all($attemptQuery, [$runId, $after]);
                 foreach ($records as $row) {
                     $after = (int) $row['id'];
                     unset($row['id']);
