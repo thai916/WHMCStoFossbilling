@@ -23,7 +23,7 @@ In verified mode, the CA field defaults to readable PHP `openssl.cafile` / `curl
 | State | Meaning |
 |---|---|
 | `paused` | No future batches authorized until Resume |
-| `running` | Explicitly resumed; a browser must schedule bounded batch requests |
+| `running` | Explicitly resumed; a browser must schedule bounded batch requests. It can remain `running` while stalled after logout, a 429, a closed browser or an expired absolute session; the flag alone does not prove another worker is active. |
 | `preview_finished` | Dry scan finished; no native insertion/financial success implied |
 | `partial_archived` | Selected records scanned without unresolved row failures; required native migration categories remain unimplemented |
 | `requires_action` | Failed rows or discovered/processed count mismatch; cannot claim success |
@@ -55,6 +55,23 @@ Test connection submits the administrator's selected WHMCS server timezone from 
 Database connection loss rolls back the currently open destination transaction. Earlier committed records and cursors remain. A killed browser does not reverse committed work.
 
 Pause/cancel waits for the source advisory lock; if a batch is still executing, the control request may ask you to retry. The browser stops scheduling immediately. There is no claim that an in-flight source read is forcibly cancelled.
+
+## Session-timeout recovery
+
+On page load the wizard reads the dashboard and, if the newest non-dry run is `paused` or `running`, opens Step 4 directly with an **Unfinished import found** banner. It does not resume, retry or repair automatically. Committed batches remain intact.
+
+- `paused`: **Resume this import** continues explicitly after reviewing progress.
+- `running`: **Take over processing here** requires a confirmation because another tab may still be driving the run. Declining changes nothing; read-only status watching may continue.
+- **Choose another source** leaves the run as it was and returns to the two-source landing page.
+- `requires_action` runs stay selectable in Step 4 but do not open this banner.
+
+Each drive call still uses a fresh 32-hex idempotency key, a 15-second server budget and adaptive row sizing that starts at 500 and never exceeds 2,000. Existing 8-second browser pacing and all source/destination safety guards remain in force.
+
+## Imported visibility repair
+
+Older 0.2 imports can leave hosting orders and invoices hidden by core list filters. On Step 4, select the affected run, open **Repair imported visibility**, acknowledge the limited field change, type `REPAIR IMPORTED VISIBILITY` exactly and confirm the final scoped prompt.
+
+The repair is limited to verified module-owned rows for the selected run (and optional source). It sets `client_order.group_master=1` for imported hosting orders and `invoice.approved=1` for eligible paid/canceled/refunded invoices, then refreshes module checksums. No record is re-imported, deleted, renumbered, notified or given a changed status. It is safe to repeat; a second run reports zero changes. Canceled/refunded invoices are administrator-visible only because the client portal has Paid/Unpaid tabs.
 
 ## Exceptions and retries
 

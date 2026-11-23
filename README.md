@@ -26,8 +26,9 @@ This extension is **vibe coded**. It requires independent security review and di
 - Batched dry run with an explicit archive/reference/historical target: source scan, client conflict checks and supported-adapter value/eligibility validation. **Not a simulation of every insertion, aggregate or financial relationship.**
 - Fresh-install/ownership checks and explicit authorization before non-preview runs; no mandatory destination backup reference.
 - Two source choices: existing SELECT-only database connection, or private streamed SQL/GZIP/ZIP upload with no SQL execution or staging database.
-- Durable per-record checkpoints, source-level database advisory locks, committed-request replay, pause/resume/cancel, bounded failed-record retry. Step 4 groups batches into paced server-side drive calls so FOSSBilling's shared API rate limiter is not exhausted by browser polling.
-- Cross-run identity mappings and unchanged-record skipping. Changed native records are **not** automatically updated.
+- Durable per-record checkpoints, source-level database advisory locks, committed-request replay, pause/resume/cancel, bounded failed-record retry. Step 4 groups batches into paced server-side drive calls so FOSSBilling's shared API rate limiter is not exhausted by browser polling. Row size adapts conservatively from 500 to at most 2,000 per batch using measured elapsed time and page bytes; the five-second local work cap and 8 MiB source-page budget remain hard guards.
+- Cross-run identity mappings and unchanged-record skipping. Changed native records are **not** automatically updated. If the FOSSBilling admin session expires mid-run, reopening the wizard finds the newest non-dry `running`/`paused` run, opens Step 4 with a Resume/Take-over prompt and schedules nothing automatically.
+- Imported hosting orders set `group_master=1` and eligible imported invoices set `approved=1`, so core client/admin order and invoice lists show them. A separate confirmed, run-scoped **Repair imported visibility** action fixes only those two fields on module-owned records from earlier imports; it never re-imports, deletes, renumbers or emails.
 - Structured administrator-only archives, indexed relationships, original dates, disclosed exclusions/redactions and prior revisions. Per-run extracted snapshots cannot be replaced by a later run's latest archive.
 - Native currencies, client groups, clients, categories and **disabled/hidden/manual products**.
 - Native base-currency prices/setup fees for free, one-time, monthly, quarterly, semiannual, annual, biennial and triennial billing. Independent currency matrices are preserved separately without exchange-rate substitution.
@@ -99,6 +100,14 @@ the file preparation above. The subsequent mapping and migration steps are share
 9. Explicitly resume. Extraction, credit publication and financial assessment all checkpoint across requests. Browser closure stops new scheduling; reopen, select the persisted run and resume.
 10. Inspect archives, credit results and financial exceptions, then export reports. Never describe archive-only records as native imports or snapshot totals as final cutover reconciliation.
 
+### After a session timeout
+
+A `running` run can stall after logout, a 429, a closed browser or an expired absolute session; that state does not prove another tab is active. On the next page load the wizard appears directly on Step 4 for the newest non-dry `running`/`paused` run, with an **Unfinished import found** banner. A paused run offers **Resume this import**; a running run offers **Take over processing here** with a confirmation that another tab may still be driving it. **Choose another source** leaves the run untouched. Status watching is read-only until you explicitly resume or take over. `requires_action` runs remain selectable in Step 4 but do not trigger this banner.
+
+### Repair imported visibility
+
+Records imported by an earlier 0.2 build can be hidden in core lists. On Step 4, select that run, acknowledge the limited field change, type `REPAIR IMPORTED VISIBILITY` and confirm the final scoped prompt. The endpoint accepts only that exact phrase, requires the same admin POST/CSRF/execute checks as other mutating actions, and changes only `client_order.group_master` and `invoice.approved` on verified module-owned rows for the selected run. It refreshes module-owned checksums, is idempotent, and sends no notifications. Canceled/refunded invoices are visible to administrators; the core client portal only has Paid/Unpaid tabs.
+
 ### Modes
 
 | Mode | Destination writes |
@@ -131,6 +140,7 @@ Do not connect this preview to real customer data until it has been reviewed. Pr
 - Products remain disabled/manual even after pricing import. Only the destination's actual base currency has native product price slots. Configurable options and ambiguous package/server mappings still require manual reconciliation.
 - Active/suspended/pending hosting and all native domain orders remain blocked. Inactive source hosting statuses convert to native `canceled`; exact original statuses remain in metadata.
 - Unpaid/draft invoices are unsafe because core cron expiry deletion ignores approval. Compound taxes, unknown historical currencies, unallocated/multi-invoice payments and simultaneous in/out movements remain unsupported natively.
+- Eligible imported invoices are marked approved only for list visibility; the core client portal still exposes only Paid/Unpaid tabs, so canceled/refunded history is administrator-visible rather than a fabricated portal status.
 - Eligible invoices require explicit source currency and exact line/subtotal/single-tax agreement. No invented tax/balancing lines, invoice payments or exchange rates are generated. Native invoice publication is limited to 200 lines per aggregate.
 - Verified credit publication is limited to 200 movements per client. Every source movement must sum exactly to the source final balance; existing unowned destination movements or actionable unpaid invoices block publication. No opening balance is synthesized. Published native credits are real funds: use only an otherwise idle private destination.
 - Snapshots compare extracted source facts with native records at the recorded check time, not with a globally consistent live WHMCS snapshot. Outstanding debt/allocation reconstruction remains unverified; inferred currency bases are disclosed. Later destination changes require another assessment.

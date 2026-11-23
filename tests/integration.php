@@ -259,7 +259,11 @@ try {
         $driven = $service->drive($drivenPreview['id'], str_repeat('d', 30) . sprintf('%02x', $driveSteps), 2000, 50);
     }
     expect(!in_array($driven['status'], ['running', 'paused'], true), 'Repeated rate-limit-safe drive calls finish an authorized preview');
+    expect($firstDrive['batch_limit'] === 50 && isset($firstDrive['next_limit']) && $firstDrive['next_limit'] >= 1 && $firstDrive['next_limit'] <= 2000, 'Drive results expose the adaptive batch decision without exceeding the hard cap');
     rejects(fn () => $service->drive($drivenPreview['id'], 'not-a-drive-id'), 'Drive identifiers must be 32 lowercase hex characters');
+    rejects(fn () => $service->drive($drivenPreview['id'], str_repeat('e', 32), 15001, 50), 'Drive budget cannot exceed the 15-second API cap');
+    rejects(fn () => $service->drive($drivenPreview['id'], str_repeat('e', 32), 9000, 2001), 'Drive batch size cannot exceed 2000 rows');
+    rejects(fn () => $service->batch($drivenPreview['id'], str_repeat('e', 32), 2001), 'Direct batch size cannot exceed 2000 rows');
     $advancedPreview = $service->createRun($runInput + ['mode' => 'dry_run', 'target_mode' => 'historical_native'], 1);
     $service->control($advancedPreview['id'], 'resume');
     do {
@@ -387,7 +391,7 @@ try {
     expect((int) $store->one('SELECT COUNT(*) AS n FROM invoice')['n'] === 1 && $invoice['nr'] === '003' && $invoice['currency'] === 'EUR', 'Only safely representable invoice publishes natively with its numeric legacy number and currency');
     expect($invoice['created_at'] === '2011-01-01 00:00:00' && $invoice['paid_at'] === '2011-01-05 12:00:00', 'Native invoice preserves original creation and payment dates');
     $item = $store->one('SELECT * FROM invoice_item');
-    expect($item['task'] === 'void' && $item['status'] === 'executed' && (int) $invoice['approved'] === 0, 'Native historical invoice items are non-actionable and invoice is not approved for billing');
+    expect($item['task'] === 'void' && $item['status'] === 'executed' && (int) $invoice['approved'] === 1, 'Native historical invoice items stay non-actionable while the invoice is approved for client visibility');
     $transaction = $store->one('SELECT * FROM transaction');
     expect($transaction['txn_id'] === 'EUR-EXACT' && $transaction['created_at'] === '2011-01-05 12:00:00' && $transaction['status'] === 'processed' && $transaction['gateway_id'] === null, 'Native historical payment retains reference/date and cannot enter gateway processing queue');
     $assessment = $service->status($financial['id'])['reconciliation'];
@@ -436,6 +440,7 @@ try {
     expect((int) $store->one('SELECT COUNT(*) AS n FROM service_hosting')['n'] === 1 && $hosting['username'] === 'olduser' && $hosting['ip'] === '198.51.100.50', 'Only a safely inactive historical hosting service is imported with existing account identity');
     expect($order['status'] === 'canceled' && $order['period'] === '1M' && $order['exact_price'] === '7.50' && $order['created_at'] === '2008-01-01 00:00:00' && $order['expires_at'] === '2009-01-01 00:00:00', 'Historical hosting order preserves original billing cycle, dates and service-specific price');
     expect(json_decode($order['config'], true)['legacy_status'] === 'Terminated' && $hosting['pass'] === null, 'Original hosting status is traceable and no account password is imported');
+    expect((int) $order['group_master'] === 1, 'Imported hosting orders are group masters so core client/admin order lists show them');
     $ormConfig = \Doctrine\ORM\ORMSetup::createAttributeMetadataConfig([dirname(__DIR__, 2) . '/Order/Entity'], cache: new \Symfony\Component\Cache\Adapter\ArrayAdapter());
     $ormConfig->setNamingStrategy(new \Doctrine\ORM\Mapping\UnderscoreNamingStrategy(CASE_LOWER));
     if (PHP_VERSION_ID >= 80400) $ormConfig->enableNativeLazyObjects(true);
@@ -447,6 +452,27 @@ try {
     $em = new \Doctrine\ORM\EntityManager($dbal, $ormConfig);
     $repository = $em->getRepository(\Box\Mod\Order\Entity\Order::class);
     expect($repository->getExpired() === [] && $repository->getSoonExpiringActiveOrders(14) === [] && $repository->getStaleUnpaid(1) === [], 'Actual core order selectors exclude historical canceled services from suspension, renewal invoicing and unpaid cleanup');
+    [$visibleOrderSql, $visibleOrderParams] = (new \Box\Mod\Order\Service())->getSearchQuery(['hide_addons' => 1, 'id' => $order['id']]);
+    expect(str_contains($visibleOrderSql, 'co.group_master = 1') && count($store->all('SELECT id FROM client_order WHERE id=? AND group_master=1', [$order['id']])) === 1, 'Actual core order visibility filter includes the imported historical order when hide_addons is enabled');
+    [$visibleInvoiceSql, $visibleInvoiceParams] = (new \Box\Mod\Invoice\Service())->getSearchQuery(['client_id' => $invoice['client_id'], 'approved' => true, 'id' => $invoice['id']]);
+    expect(count($dbal->fetchAllAssociative($visibleInvoiceSql, $visibleInvoiceParams)) === 1, 'Actual core client invoice query includes the approved historical invoice');
+
+    // Simulate records created by an earlier 0.2 build, then verify the explicit,
+    // scoped repair changes only the two visibility flags on module-owned rows.
+    $store->execute('UPDATE client_order SET group_master=0 WHERE id=?', [$order['id']]);
+    $store->execute('UPDATE invoice SET approved=0 WHERE id=?', [$invoice['id']]);
+    rejects(fn () => $service->repairVisibility(['run_id' => $financial['id'], 'confirmation' => 'WRONG PHRASE']), 'Visibility repair refuses an incorrect confirmation phrase');
+    expect((int) $store->one('SELECT group_master FROM client_order WHERE id=?', [$order['id']])['group_master'] === 0 && (int) $store->one('SELECT approved FROM invoice WHERE id=?', [$invoice['id']])['approved'] === 0, 'A rejected repair changes no destination records');
+    $repair = $service->repairVisibility(['run_id' => $financial['id'], 'confirmation' => \Box\Mod\Whmcstofossbilling\Destination\VisibilityRepair::CONFIRMATION]);
+    expect($repair['orders'] === 1 && $repair['invoices'] === 1 && $repair['changed'] === 2, 'Confirmed scoped repair restores both imported visibility flags');
+    expect((int) $store->one('SELECT group_master FROM client_order WHERE id=?', [$order['id']])['group_master'] === 1 && (int) $store->one('SELECT approved FROM invoice WHERE id=?', [$invoice['id']])['approved'] === 1, 'Repair writes only the imported order/invoice visibility flags');
+    $repairedIdentity = $store->one("SELECT destination_checksum FROM whmcstofossbilling_identity WHERE run_id=? AND destination_entity='client_order' AND destination_id=?", [$financial['id'], $order['id']]);
+    $repairedOrder = $store->one('SELECT * FROM client_order WHERE id=?', [$order['id']]);
+    expect(hash_equals($repairedIdentity['destination_checksum'], hash('sha256', Store::json($repairedOrder))), 'Repair refreshes the module-owned checksum so incremental runs do not see false drift');
+    expect($service->repairVisibility(['run_id' => $financial['id'], 'confirmation' => \Box\Mod\Whmcstofossbilling\Destination\VisibilityRepair::CONFIRMATION])['changed'] === 0, 'Repeated visibility repair is an idempotent no-op');
+    [$visibleOrderSql, $visibleOrderParams] = (new \Box\Mod\Order\Service())->getSearchQuery(['hide_addons' => 1, 'id' => $order['id']]);
+    [$visibleInvoiceSql, $visibleInvoiceParams] = (new \Box\Mod\Invoice\Service())->getSearchQuery(['client_id' => $invoice['client_id'], 'approved' => true, 'id' => $invoice['id']]);
+    expect(str_contains($visibleOrderSql, 'co.group_master = 1') && count($store->all('SELECT id FROM client_order WHERE id=? AND group_master=1', [$order['id']])) === 1 && count($dbal->fetchAllAssociative($visibleInvoiceSql, $visibleInvoiceParams)) === 1, 'Core client/admin visibility works again after the confirmed repair');
     $financialAgain = $service->createRun(array_replace($authorized, ['mode' => 'historical_native']), 1);
     $service->control($financialAgain['id'], 'resume');
     do {

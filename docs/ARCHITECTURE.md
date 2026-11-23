@@ -18,9 +18,9 @@ The local installed requirements demand PHP 8.3+. Laragon Apache configuration p
 | `Mapping/` | Versioned field-disposition registry and allowlisted text transforms |
 | `Security/` | Safe errors, conservative sensitive-data policy and AES-256-GCM credential vault |
 | `Installation/` | Idempotent extension-only DDL |
-| `Destination/` | Validated historical aggregate persistence, products/pricing/servers, inactive hosting, eligible invoices/payments/credits and closed history |
+| `Destination/` | Validated historical aggregate persistence, products/pricing/servers, inactive hosting, eligible invoices/payments/credits, closed history and confirmed scoped visibility repair |
 | `Archive/` | Redacted structured evidence, historical dates, relationship hints and prior revisions |
-| `Migration/` | Plan, durable cursors, serialization, bounded batches and retries |
+| `Migration/` | Plan, durable cursors, serialization, conservative adaptive batch sizing, bounded batches and retries |
 | `Finance/` | Decimal arithmetic and resumable extracted-baseline/native assessment; not complete debt/cutover reconciliation |
 | `Report/` | Streaming safe count/disposition exports |
 
@@ -55,7 +55,15 @@ The current worker uses source-level `GET_LOCK` serialization. The database rele
 
 Successful per-record transactions survive a killed request. A retry resumes from the committed cursor. If a response is lost before its final request-result marker commits, replay may process subsequent records from the durable cursor; it cannot duplicate committed identities. The implementation guarantees record-level idempotency, not exactly-once HTTP response delivery.
 
-Each request reads at most 100 rows (UI default 50). After five seconds of local work the worker stops before the next row. A slow individual database/network operation is not forcibly interruptible by this local timer. MySQL query hints and short connection timeouts are additional defenses, not a proven bound on every network failure.
+A drive request runs up to four idempotent batches within a 15-second server budget; the UI starts at 500 rows and keeps a durable `next_limit` decision across calls. `BatchSizer` may grow toward 2,000 when measured work is fast and pages are small, shrink 25% near the five-second local work cap or the 6 MiB sizing warning threshold, halve on empty batches, and never exceed the hard 1–2,000 range. Readers still refuse page byte budgets above 8 MiB. After five seconds of local work the worker stops before the next row. A slow individual database/network operation is not forcibly interruptible by this local timer. MySQL query hints and short connection timeouts are additional defenses, not a proven bound on every network failure.
+
+The last batch result is read from extension-owned storage before sizing a new drive call; replay of the same 32-hex drive request returns its original cached result and cannot double-apply work. Adaptive sizing only chooses how many rows are offered to the existing guards: source locks, checkpoints, 32-hex batch idempotency, byte budgets, five-second work cap and eight-second browser pacing are unchanged.
+
+## Visibility flags and repair
+
+Native hosting importers set `client_order.group_master=1` because core order searches default to `hide_addons=1` and filter add-ons out. Eligible historical invoices set `invoice.approved=1` because the core client invoice API forces `approved=true`; only non-unpaid statuses are eligible, so approval grants visibility without creating a payable state. Canceled/refunded invoices remain administrator-visible because the client portal only offers Paid/Unpaid tabs.
+
+`Destination\VisibilityRepair` is a separate, confirmed action for records already imported by older builds. It accepts the exact phrase `REPAIR IMPORTED VISIBILITY`, optionally scopes by run/source, locks each source, verifies module-owned identity rows, and updates only those two native flags in a destination transaction. It refreshes `destination_checksum` so incremental runs do not see false drift, is idempotent, and performs no re-import, deletion, renumbering, notification or core schema change.
 
 Extraction probes lengths without retrieving sensitive columns, limits each value page by a conservative PHP-memory byte budget, and evaluates oversized-row/field guards in the source SELECT. Oversized contents never become fabricated null archive data; their source IDs are retained as explicit failures. A short byte-limited page is not treated as end-of-table.
 
@@ -82,7 +90,7 @@ An extension-owned quarantine flag is not consulted by these core selectors. A b
 The implementation now has a reviewed **non-operational historical subset**, not a global quarantine:
 
 - Inactive hosting becomes native canceled orders with the exact source status in metadata; actual expiration/renewal/unpaid-cleanup selectors exclude them.
-- Eligible invoices are already paid/canceled/refunded, unapproved, with custom/void/executed/charged items. Actual core paid-item/credit-payment/expiry selectors exclude them.
+- Eligible invoices are already paid/canceled/refunded, approved only for core list visibility, with custom/void/executed/charged items. Actual core paid-item/credit-payment/expiry selectors exclude their non-unpaid status.
 - Native historical transactions are processed and have no operational gateway; actual received/processing selectors exclude them.
 - Credit aggregates require complete source reconciliation and no actionable destination unpaid invoice or unowned native movement.
 - Only closed tickets and email delivery history are published, without lifecycle APIs or queue writes.

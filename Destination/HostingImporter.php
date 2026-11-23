@@ -62,6 +62,9 @@ final class HostingImporter
             'client_id' => $client, 'product_id' => $product, 'service_id' => $service, 'service_type' => 'hosting',
             'title' => $domain, 'currency' => $clientData['currency'], 'price' => $amount, 'quantity' => 1,
             'period' => $period, 'status' => 'canceled', 'invoice_option' => 'no-invoice',
+            // Core client/admin order lists default to hide_addons=1, which filters
+            // co.group_master = 1. Without this, imported services are invisible.
+            'group_master' => 1,
             'created_at' => $created, 'updated_at' => null, 'expires_at' => $due, 'canceled_at' => $terminated,
             'config' => Store::json([
                 'import' => true, 'server_id' => $server, 'hosting_plan_id' => $plan,

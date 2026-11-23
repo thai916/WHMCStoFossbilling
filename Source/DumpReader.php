@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Box\Mod\Whmcstofossbilling\Source;
 
+use Box\Mod\Whmcstofossbilling\Migration\BatchSizer;
 use Box\Mod\Whmcstofossbilling\Security\SafeException;
 use Box\Mod\Whmcstofossbilling\Source\Backup\EncryptedFile;
 use Box\Mod\Whmcstofossbilling\Source\Backup\Job;
@@ -38,9 +39,9 @@ final class DumpReader
     public function page(string $name, array $definition, string $after, string $maximum, int $limit): array
     {
         $this->assertReadable($name, $definition);
-        if (!ctype_digit($after) || !ctype_digit($maximum) || $limit < 1 || $limit > 100) throw new SafeException('Invalid SQL backup cursor.');
+        if (!ctype_digit($after) || !ctype_digit($maximum) || $limit < BatchSizer::MIN_ROWS || $limit > BatchSizer::MAX_ROWS) throw new SafeException('Invalid SQL backup cursor.');
         $count = (int) $this->state['tables'][$name]['count'];
-        if (!$count) return ['rows' => [], 'exhausted' => true];
+        if (!$count) return ['rows' => [], 'exhausted' => true, 'bytes' => 0];
         $directory = Job::directory($this->options['backup_id']);
         $index = EncryptedFile::open($directory . '/' . $name . '.sorted', $this->job->key());
         $rowStream = EncryptedFile::open($directory . '/' . $name . '.rows', $this->job->key());
@@ -69,7 +70,7 @@ final class DumpReader
             }
             if ($position >= $count) $exhausted = true;
         } finally { fclose($index); fclose($rowStream); }
-        return ['rows' => $rows, 'exhausted' => $exhausted];
+        return ['rows' => $rows, 'exhausted' => $exhausted, 'bytes' => $bytes];
     }
 
     private function record($stream, int $position): string

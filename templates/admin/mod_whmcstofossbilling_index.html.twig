@@ -15,6 +15,14 @@
             <strong>Preserve history first. Publish supported records safely.</strong> This is not a complete billing migration. This experimental tool is not ready for a live billing cutover.
             <details class="mt-2"><summary>Supported records and migration limits</summary><p>Native clients, catalog, closed tickets and email history are supported. Historical mode also supports eligible inactive hosting, representable historical invoices, payments and verified credit aggregates. Active services, domains, unpaid invoices and unsupported financial cases remain blocked natively; eligible source records stay in the private legacy archive. Attachments require a separate file transfer.</p><ul id="wm-blockers" class="mt-2"></ul></details>
     </div>
+    <div id="wm-recovery-banner" class="alert alert-warning border-warning d-none" role="alert">
+        <strong>Unfinished import found.</strong>
+        <p id="wm-recovery-description" class="mb-2"></p>
+        <div class="d-flex flex-wrap gap-2">
+            <button id="wm-recovery-primary" class="btn btn-warning" type="button">Resume this import</button>
+            <button id="wm-recovery-choose-source" class="btn btn-outline-secondary" type="button">Choose another source</button>
+        </div>
+    </div>
     <div id="wm-notice" class="alert d-none" role="status" aria-live="polite"></div>
     <div id="wm-preparation" class="wm-preparation d-none mb-3" aria-busy="false">
         <div class="d-flex justify-content-between gap-2"><span id="wm-preparation-label" role="status" aria-live="polite">Checking settings</span><strong id="wm-preparation-percent"></strong></div>
@@ -156,6 +164,13 @@
                 <button class="btn btn-outline-secondary" id="wm-report-csv" type="button">Export CSV report</button>
             </div>
             <p class="text-muted">Closing this tab stops future requests, not committed work. Reopen, select the run and resume. A cancelled run keeps imported records. There is no destructive automatic rollback.</p>
+            <div id="wm-repair-panel" class="alert alert-light border mt-3">
+                <h4 class="alert-heading h5">Repair imported visibility</h4>
+                <p class="small">For records created by this module before the visibility fix, set <code>group_master=1</code> on imported hosting orders and <code>approved=1</code> on eligible paid, canceled or refunded invoices. Only module-owned records for the selected run are changed. Nothing is deleted, re-imported, renumbered or emailed.</p>
+                <label class="form-check"><input id="wm-repair-acknowledged" class="form-check-input" type="checkbox" value="1"><span class="form-check-label">I understand this writes only those two visibility fields to module-owned destination records.</span></label>
+                <label class="form-label mt-2" for="wm-repair-confirm">Type REPAIR IMPORTED VISIBILITY</label>
+                <div class="d-flex flex-wrap gap-2 align-items-start"><input id="wm-repair-confirm" class="form-control wm-search" autocomplete="off" maxlength="28"><button id="wm-repair-visibility" class="btn btn-outline-warning" type="button">Repair visibility</button></div>
+            </div>
             <div class="wm-preservation-summary" aria-label="Preservation outcomes"><div><span>Native imported</span><strong id="wm-native-total">0</strong><small>Available through supported FOSSBilling features</small></div><div><span>Archive only</span><strong id="wm-archive-total">0</strong><small>Preserved as private legacy evidence</small></div><div><span>Needs attention</span><strong id="wm-failed-total">0</strong><small>Review exceptions; preservation may be incomplete</small></div></div>
             <div id="wm-counts"></div><h4 class="mt-3">Date substitutions (first 100)</h4><div id="wm-date-fallbacks"></div>
             <h4 class="mt-3">Exceptions (first 100)</h4><div id="wm-errors"></div>

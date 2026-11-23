@@ -21,9 +21,9 @@ final class Engine
     {
     }
 
-    public function batch(string $runId, string $requestId, int $limit = 50): array
+    public function batch(string $runId, string $requestId, int $limit = BatchSizer::START_ROWS): array
     {
-        if (!preg_match('/\A[a-f0-9]{32}\z/D', $requestId) || $limit < 1 || $limit > 100) {
+        if (!preg_match('/\A[a-f0-9]{32}\z/D', $requestId) || $limit < BatchSizer::MIN_ROWS || $limit > BatchSizer::MAX_ROWS) {
             throw new SafeException('Invalid batch request identifier or size.');
         }
         $run = $this->store->run($runId);
@@ -74,10 +74,13 @@ final class Engine
             }
             $name = $cursor['table_name'];
             $definition = $schema[$name];
+            $batchStarted = microtime(true);
             $page = $reader->page($name, $definition, $cursor['after_id'], $cursor['maximum'], $limit);
             $rows = $page['rows'];
             $native = new NativeWriter($this->store, (int) $source['id'], $options['prefix'], $plan['source_timezone'] ?? null, $plan['invalid_date_fallback'] ?? null);
             $archive = new Repository($this->store);
+            // The local five-second work cap starts after extraction; the total
+            // elapsed measurement below also includes the bounded source read.
             $started = microtime(true);
             $processed = 0;
             foreach ($rows as $row) {
@@ -145,7 +148,12 @@ final class Engine
             }
             $this->store->execute('UPDATE whmcstofossbilling_run SET updated_at=UTC_TIMESTAMP(),last_batch_at=UTC_TIMESTAMP() WHERE id=?', [$runId]);
 
-            return $this->result($runId, $requestId, $processed);
+            return $this->result($runId, $requestId, $processed, [
+                'requested_limit' => $limit,
+                'elapsed_ms' => max(1, (int) round((microtime(true) - $batchStarted) * 1000)),
+                'page_bytes' => (int) ($page['bytes'] ?? 0),
+                'page_exhausted' => !empty($page['exhausted']) && $processed === count($rows),
+            ]);
         } finally {
             $this->store->unlock($lock);
         }
@@ -250,9 +258,19 @@ final class Engine
         $this->store->execute('UPDATE whmcstofossbilling_run SET status=?,updated_at=UTC_TIMESTAMP() WHERE id=?', [$status, $run]);
     }
 
-    private function result(string $run, string $request, int $processed): array
+    private function result(string $run, string $request, int $processed, array $metrics = []): array
     {
         $result = ['run_id' => $run, 'status' => $this->store->run($run)['status'], 'batch_processed' => $processed];
+        if ($metrics !== []) {
+            $limit = BatchSizer::clamp((int) ($metrics['requested_limit'] ?? 0));
+            $sizingInput = $metrics + ['batch_processed' => $processed];
+            $result['batch_limit'] = $limit;
+            $result['requested_limit'] = $limit;
+            $result['elapsed_ms'] = max(0, (int) ($metrics['elapsed_ms'] ?? 0));
+            $result['page_bytes'] = max(0, (int) ($metrics['page_bytes'] ?? 0));
+            $result['page_exhausted'] = (bool) ($metrics['page_exhausted'] ?? false);
+            $result['next_limit'] = BatchSizer::next($limit, $sizingInput);
+        }
         $this->store->execute('INSERT INTO whmcstofossbilling_batch (run_id,request_id,result_json,created_at) VALUES (?,?,?,UTC_TIMESTAMP())', [$run, $request, Store::json($result)]);
 
         return $result;

@@ -18,9 +18,9 @@ The WHMCS table names below are default-prefix examples. Discovery uses the conf
 | `tblpricing` | Native base-currency pricing + extension matrix | Free, one-time, monthly through triennial cycle prices/setup fees; -1 disables a cycle. Independent foreign-currency prices remain exact structured matrices, not converted or substituted into native slots. |
 | Product add-ons | Native add-on products/prices/parent links + archive | Supported billing modes, setup/recurring prices and original package links; all products remain disabled/manual. |
 | Configurable options | Extension archive | Definitions/selections preserved; equivalent active native option/upgrade logic remains incomplete. |
-| `tblhosting` | Historical native service/order subset + archive | Historical mode supports terminated/cancelled/fraud records as native canceled orders, exact original status in metadata, original account identity/IP/server/package/dates/cycle/amount. Active/suspended/pending remain blocked. |
+| `tblhosting` | Historical native service/order subset + archive | Historical mode supports terminated/cancelled/fraud records as native canceled orders with `group_master=1` so core lists show them; exact original status remains in metadata with original account identity/IP/server/package/dates/cycle/amount. Active/suspended/pending remain blocked. |
 | `tbldomains`, related metadata | Extension archive | Domain dates/status/relationships retained; sensitive EPP/auth fields excluded. No registrar API action. |
-| `tblinvoices`, `tblinvoiceitems` | Supported historical native subset + archive | Paid/canceled/refunded invoices with explicit source currency, exact line/subtotal/single-tax agreement and at most 200 lines publish atomically. Numeric legacy numbers use a separate series; text numbers remain searchable by original reference. Items are custom/void/executed/charged with no operational service task. Unpaid/draft, compound-tax and ambiguous-currency invoices remain blocked. |
+| `tblinvoices`, `tblinvoiceitems` | Supported historical native subset + archive | Paid/canceled/refunded invoices with explicit source currency, exact line/subtotal/single-tax agreement and at most 200 lines publish atomically. Eligible invoices set `approved=1` so the core client invoice query lists them; the portal has only Paid/Unpaid tabs, so canceled/refunded history is administrator-visible. Numeric legacy numbers use a separate series; text numbers remain searchable by original reference. Items are custom/void/executed/charged with no operational service task. Unpaid/draft, compound-tax and ambiguous-currency invoices remain blocked. |
 | `tblaccounts` | Processed native transactions where invoice safely exists + archive | Historical dates/references/currencies/positive receipt or refund movements; multiple payments and partial refunds per invoice. No gateway adapter assigned or invoked. Fees, unallocated/multi-invoice cases and simultaneous in/out semantics remain unsupported natively. |
 | `tblcredit` and client credit | Verified native aggregates + archive | At most 200 original movements/client, atomic publication, unchanged verified client identity, no unowned destination movements or actionable unpaid invoices, exact source closing-balance agreement. No invented opening balance; mismatches publish nothing. |
 | Ticket departments/statuses/priorities | Native helpdesks + archive | Inactive historical helpdesk settings, explicit Closed-only policy; Low/Medium/High are deliberately converted to numeric ranks 50/100/200 (FOSSBilling uses an editable numeric priority, not these WHMCS enums). Original labels remain archived. |
@@ -44,6 +44,10 @@ The WHMCS table names below are default-prefix examples. Discovery uses the conf
 - `firstname/lastname/companyname/address1/address2/city/state/postcode/country/phonenumber/tax_id/notes/email` have reviewed editable client text targets.
 - Text transforms: keep original, trim, lowercase+trim. Arbitrary SQL/PHP expressions are not allowed.
 - Source keys and selected financial/service fields cannot be skipped through mappings.
+
+## Visibility of earlier imports
+
+Hosting orders and invoices created by builds before the visibility fix can be repaired without re-importing. The confirmed, run-scoped action changes only `client_order.group_master` and `invoice.approved` on module-owned records, refreshes their module checksums and is idempotent. It does not alter status, numbers, totals, source records, core schema or notifications.
 
 ## Missing production acceptance criteria
 

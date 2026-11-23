@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Box\Mod\Whmcstofossbilling\Api;
 
+use Box\Mod\Whmcstofossbilling\Migration\BatchSizer;
 use Box\Mod\Whmcstofossbilling\Report\Exporter;
 use Box\Mod\Whmcstofossbilling\Security\SafeException;
 use Box\Mod\Whmcstofossbilling\Security\Sensitive;
@@ -152,7 +153,7 @@ final class Admin extends \FOSSBilling\Api\AbstractApi
 
     public function run_batch(array $data): array
     {
-        return $this->guarded('execute', fn (): array => $this->getService()->batch((string) ($data['run_id'] ?? ''), (string) ($data['request_id'] ?? ''), (int) ($data['limit'] ?? 50)));
+        return $this->guarded('execute', fn (): array => $this->getService()->batch((string) ($data['run_id'] ?? ''), (string) ($data['request_id'] ?? ''), (int) ($data['limit'] ?? BatchSizer::START_ROWS)));
     }
 
     public function run_drive(array $data): array
@@ -160,14 +161,19 @@ final class Admin extends \FOSSBilling\Api\AbstractApi
         return $this->guarded('execute', fn (): array => $this->getService()->drive(
             (string) ($data['run_id'] ?? ''),
             (string) ($data['drive_id'] ?? ''),
-            (int) ($data['budget_ms'] ?? 9000),
-            (int) ($data['limit'] ?? 100)
+            (int) ($data['budget_ms'] ?? 15000),
+            (int) ($data['limit'] ?? BatchSizer::START_ROWS)
         ));
     }
 
     public function run_retry(array $data): array
     {
         return $this->guarded('execute', fn (): array => $this->getService()->retry((string) ($data['run_id'] ?? '')));
+    }
+
+    public function run_repair_visibility(array $data): array
+    {
+        return $this->guarded('execute', fn (): array => $this->getService()->repairVisibility($data));
     }
 
     public function archive_search(array $data): Response

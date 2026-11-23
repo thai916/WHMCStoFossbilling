@@ -39,6 +39,7 @@ const source = {
     fields: Object.entries(schema).flatMap(([table, def]) => Object.entries(def.columns).map(([field, col]) => ({ category: "Synthetic fixture", table, field, type: col.type, required: field === "id", classification: def.classification, ...profile.fields[table][field] })))
 };
 let currentRun = null;
+let recoveryRun = null;
 let failNextCreation = false, failNextAnalysis = false;
 let connectionGate = null, preparationGate = null, analysisFailure = null, connectionFailure = null;
 let syntheticExisting = null, raceExisting = null;
@@ -64,6 +65,8 @@ const requests = [];
 const testedModes = [];
 const batchRequestIds = [];
 const driveRequestIds = [];
+const repairRequests = [];
+const recoveryRequestIds = [];
 let rateLimitNextStatus = false;
 let uploadedBytes = 0, uploadTotal = 0, backupPreparations = 0;
 let backupChunkGate = null, backupSortGate = null;
@@ -74,6 +77,11 @@ const server = http.createServer((request, response) => {
     if (!item) { response.writeHead(404); response.end(); return; }
     response.writeHead(200, { "Content-Type": item[1] }); response.end(item[0]);
 });
+function dashboardFixture() {
+    const runs = [{ id: historicalRunId, created_at: "2026-01-01", mode: "historical_native", status: "requires_action", label: "synthetic history" }];
+    if (recoveryRun) runs.unshift({ id: recoveryRun.id, created_at: "2026-01-02", mode: recoveryRun.mode, status: recoveryRun.status, label: "unfinished synthetic import" });
+    return { schema_upgrade_required: schemaUpgradeRequired, environment: { blockers: source.blockers }, sources: [{ id: 1, label: source.label, tested_at: "2026-01-01" }], runs };
+}
 (async () => {
     await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
     const port = server.address().port;
@@ -86,7 +94,7 @@ const server = http.createServer((request, response) => {
         const page = await browser.newPage(), errors = [];
         const waitTop = async () => page.waitForFunction(() => window.scrollY === 0 && (!document.getElementById("nested-admin-scroll") || document.getElementById("nested-admin-scroll").scrollTop === 0));
         page.on("pageerror", error => errors.push(error.message));
-        await page.route("**/api/admin/whmcstofossbilling/**", async route => {
+        const apiHandler = async route => {
             const request = route.request(), method = request.url().split("/").pop(), data = request.postDataJSON();
             requests.push(method);
             assert.equal(request.method(), "POST");
@@ -106,7 +114,7 @@ const server = http.createServer((request, response) => {
                     result = { backup_id: "d".repeat(32), phase: backupPreparations === 1 ? "expand" : backupPreparations === 2 ? "parse" : backupPreparations === 3 ? "sort" : "ready", uploaded: uploadedBytes, size: uploadTotal, expanded: uploadTotal, parsed: uploadTotal, sql_size: uploadTotal, tables: 43 }; break;
                 case "backup_source": result = { ...source, source_kind: "sql_file", backup_id: "d".repeat(32), connection_status: null, label: "Uploaded WHMCS SQL backup" }; break;
                 case "backup_remove": assert.equal(data.confirmation, "REMOVE PRIVATE BACKUP"); result = { removed: true }; break;
-                case "dashboard": result = { schema_upgrade_required: schemaUpgradeRequired, environment: { blockers: source.blockers }, sources: [{ id: 1, label: source.label, tested_at: "2026-01-01" }], runs: [{ id: historicalRunId, created_at: "2026-01-01", mode: "historical_native", status: "requires_action", label: "synthetic history" }] }; break;
+                case "dashboard": result = dashboardFixture(); break;
                 case "schema_upgrade":
                     assert.equal(data.confirmation, "UPGRADE EXTENSION TABLES");
                     schemaUpgradeRequired = false; result = { upgraded: true }; break;
@@ -189,16 +197,31 @@ const server = http.createServer((request, response) => {
                     currentRun = { id: "a".repeat(32), mode: data.mode, status: "paused", last_batch_at: null, categories: [{ table_name: "tblclients", expected: 1, processed: 0, imported: 0, archived: 0, skipped: 0, failed: 0 }], errors: [], reconciliation: { reason: "Not performed" } };
                     result = currentRun; break;
                 case "run_existing": result = syntheticExisting; break;
-                case "run_control":
+                case "run_control": {
+                    if (recoveryRun && data.run_id === recoveryRun.id) {
+                        recoveryRun.status = data.action === "resume" ? "running" : data.action === "cancel" ? "cancelled" : "paused";
+                        recoveryRequestIds.push(`control:${data.action}`);
+                        result = recoveryRun; break;
+                    }
                     currentRun.status = data.action === "resume" ? "running" : data.action === "cancel" ? "cancelled" : "paused";
                     if (data.action === "cancel") syntheticExisting = null;
                     result = currentRun; break;
+                }
                 case "run_drive":
                     assert.match(data.drive_id, /^[a-f0-9]{32}$/, "Drive idempotency key stays 32 lowercase hex characters without randomUUID");
-                    assert.equal(data.limit, 100, "One drive call requests the largest supported batch size");
-                    assert.equal(data.budget_ms, 9000, "Drive calls use the rate-limit-safe server budget");
+                    assert.equal(data.limit, 500, "Drive calls start at the reviewed adaptive batch size");
+                    assert.equal(data.budget_ms, 15000, "Drive calls use the rate-limit-safe server budget");
                     driveRequestIds.push(data.drive_id);
+                    if (recoveryRun && data.run_id === recoveryRun.id) {
+                        recoveryRun.status = "preview_finished"; recoveryRun.categories[0].processed = 1;
+                        recoveryRequestIds.push("drive"); result = recoveryRun; break;
+                    }
                     currentRun.status = "preview_finished"; currentRun.categories[0].processed = 1; currentRun.categories[0].archived = 1; result = currentRun; break;
+                case "run_repair_visibility":
+                    assert.deepEqual(Object.keys(data).sort(), ["confirmation", "run_id"], "Repair sends only the selected run and exact phrase, never credentials or payloads");
+                    assert.equal(data.confirmation, "REPAIR IMPORTED VISIBILITY");
+                    repairRequests.push(data);
+                    result = { orders: 2, invoices: 3, changed: 5, run_id: data.run_id, source_id: 0 }; break;
                 case "run_batch":
                     assert.match(data.request_id, /^[a-f0-9]{32}$/, "Batch idempotency key stays 32 lowercase hex characters without randomUUID");
                     batchRequestIds.push(data.request_id);
@@ -209,7 +232,9 @@ const server = http.createServer((request, response) => {
                         await route.fulfill({ status: 429, contentType: "application/json", headers: { "Retry-After": "45" }, body: JSON.stringify({ result: null, error: { message: "Rate limit exceeded. Please try again later.", code: 429 } }) });
                         return;
                     }
-                    result = data.run_id === historicalRunId ? historicalRun : currentRun; break;
+                    if (recoveryRun && data.run_id === recoveryRun.id) result = recoveryRun;
+                    else result = data.run_id === historicalRunId ? historicalRun : currentRun;
+                    break;
                 case "archive_search":
                     assert.equal(data.legacy_kind, "invoice");
                     assert.equal(data.legacy_reference, "LEGACY-001");
@@ -217,7 +242,8 @@ const server = http.createServer((request, response) => {
                 default: throw new Error("Unexpected UI request " + method);
             }
             await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ result, error: null }) });
-        });
+        };
+        await page.route("**/api/admin/whmcstofossbilling/**", apiHandler);
         await page.addInitScript(() => {
             window.TEST_SCROLL_BEHAVIORS = [];
             const windowScroll = window.scrollTo.bind(window), elementScroll = Element.prototype.scrollTo;
@@ -585,6 +611,29 @@ const server = http.createServer((request, response) => {
         assert.ok(financialRows.some(row => row.includes("EUR") && row.includes("Not represented")), "Missing native value is not rendered as zero");
         assert.match(await page.locator("#wm-credit-results").innerText(), /Closing balance mismatch/);
         assert.equal(await page.evaluate(() => window.XSS_EXECUTED), undefined, "Financial diagnostics never execute HTML");
+        assert.equal(await page.locator("#wm-repair-panel").isVisible(), true, "Step 4 exposes the confirmed visibility repair for imported records");
+        const repairsBefore = repairRequests.length;
+        await page.locator("#wm-repair-visibility").click();
+        await page.getByText("Acknowledge the limited field change", { exact: false }).waitFor();
+        assert.equal(repairRequests.length, repairsBefore, "An unacknowledged repair sends no API request");
+        await page.locator("#wm-repair-acknowledged").check();
+        await page.locator("#wm-repair-confirm").fill("WRONG PHRASE");
+        await page.locator("#wm-repair-visibility").click();
+        await page.waitForFunction(() => document.getElementById("wm-notice").textContent.includes("REPAIR IMPORTED VISIBILITY exactly"));
+        assert.equal(repairRequests.length, repairsBefore, "An incorrect repair phrase sends no API request");
+        let repairDialog = "";
+        page.once("dialog", async dialog => { repairDialog = dialog.message(); await dialog.dismiss(); });
+        await page.locator("#wm-repair-confirm").fill("REPAIR IMPORTED VISIBILITY");
+        await page.locator("#wm-repair-visibility").click();
+        assert.match(repairDialog, /module-owned records from this run only/, "Repair requires a final scoped browser confirmation");
+        assert.equal(repairRequests.length, repairsBefore, "A declined repair sends no API request");
+        page.once("dialog", dialog => dialog.accept());
+        await page.locator("#wm-repair-visibility").click();
+        await page.getByText("Repaired 2 imported hosting orders", { exact: false }).waitFor();
+        assert.equal(repairRequests.length, repairsBefore + 1, "One confirmed repair sends one scoped request");
+        assert.deepEqual(repairRequests.at(-1), { run_id: historicalRunId, confirmation: "REPAIR IMPORTED VISIBILITY" }, "Repair payload contains only the run and exact phrase");
+        assert.equal(await page.locator("#wm-repair-confirm").inputValue(), "", "Repair phrase is cleared after a successful repair");
+        assert.equal(await page.locator("#wm-repair-acknowledged").isChecked(), false, "Repair acknowledgement is cleared after a successful repair");
         const statusesBeforeLimit = requests.filter(name => name === "run_status").length;
         rateLimitNextStatus = true;
         await page.locator("#wm-refresh").click();
@@ -633,7 +682,78 @@ const server = http.createServer((request, response) => {
         await page.screenshot({ path: path.join(artifacts, "mobile.png"), fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile connection page has no horizontal overflow");
         assert.deepEqual(errors, [], "No browser JavaScript errors");
-        console.log("PASS: two-choice source landing; database fields and SQL/GZIP/ZIP upload workflow shown only after selection; single-file upload/pause/continue/progress/cleanup and shared mapping; fresh-install flow without backup-reference fields; responsive desktop/mobile source and review layouts; existing-run recovery, honest progress, session controls, idempotency, privacy and no browser storage");
+        console.log("PASS: two-choice source landing; database fields and SQL/GZIP/ZIP upload workflow shown only after selection; single-file upload/pause/continue/progress/cleanup and shared mapping; fresh-install flow without backup-reference fields; responsive desktop/mobile source and review layouts; existing-run recovery, scoped visibility repair, honest progress, session controls, idempotency, privacy and no browser storage");
+
+        // A fresh page load with a non-dry unfinished run must reopen Step 4 with a
+        // passive Resume/Take-over prompt. No batch is scheduled until explicit action.
+        const recoveryId = "e".repeat(32);
+        const makeRecoveryRun = status => ({
+            id: recoveryId, mode: "historical_native", status, last_batch_at: null,
+            categories: [{ table_name: "tblclients", expected: 4, processed: 2, imported: 1, archived: 0, skipped: 0, failed: 0 }],
+            errors: [], reconciliation: { status: "assessed", reason: "Unfinished recovery fixture." }
+        });
+        const recoveryPage = await browser.newPage();
+        const recoveryErrors = [];
+        recoveryPage.on("pageerror", error => recoveryErrors.push(error.message));
+        await recoveryPage.route("**/api/admin/whmcstofossbilling/**", apiHandler);
+        recoveryRun = makeRecoveryRun("paused");
+        recoveryRequestIds.length = 0;
+        await recoveryPage.goto(`http://127.0.0.1:${port}/`);
+        await recoveryPage.locator("#wm-recovery-banner").waitFor({ state: "visible" });
+        assert.equal(await recoveryPage.locator("#wm-recovery-primary").innerText(), "Resume this import");
+        assert.match(await recoveryPage.locator("#wm-recovery-description").innerText(), /paused with committed work intact/);
+        assert.match(await recoveryPage.locator("#wm-recovery-description").innerText(), /No batches were scheduled automatically/);
+        assert.equal(await recoveryPage.locator("#wm-source-choice").isVisible(), false, "Recovery opens Step 4 directly instead of the source chooser");
+        assert.equal(await recoveryPage.locator('#wm-navigation').isVisible(), true, "Recovery exposes the step navigation");
+        assert.equal(await recoveryPage.locator('[data-panel="progress"]').isVisible(), true, "Recovery opens the progress panel");
+        assert.match(await recoveryPage.locator("#wm-progress-label").innerText(), /historical_native · paused · 2\/4 records scanned/);
+        assert.deepEqual(recoveryRequestIds, [], "Opening a paused unfinished run schedules no resume or drive requests");
+        await recoveryPage.locator("#wm-recovery-choose-source").click();
+        assert.equal(await recoveryPage.locator("#wm-source-choice").isVisible(), true, "Choose another source escapes the recovery prompt");
+        assert.equal(await recoveryPage.locator("#wm-recovery-banner").isVisible(), false);
+        assert.equal(await recoveryPage.locator('[data-panel="progress"]').isVisible(), false);
+        assert.deepEqual(recoveryRequestIds, [], "Escaping recovery remains read-only");
+
+        recoveryRun = makeRecoveryRun("paused");
+        recoveryRequestIds.length = 0;
+        await recoveryPage.reload();
+        await recoveryPage.locator("#wm-recovery-banner").waitFor({ state: "visible" });
+        const pausedDialogs = [];
+        const pausedDialogHandler = dialog => { pausedDialogs.push(dialog.message()); dialog.accept(); };
+        recoveryPage.on("dialog", pausedDialogHandler);
+        await recoveryPage.locator("#wm-recovery-primary").click();
+        await recoveryPage.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("preview_finished"));
+        assert.deepEqual(pausedDialogs, [], "Paused runs resume without a take-over confirmation");
+        assert.deepEqual(recoveryRequestIds, ["control:resume", "drive"], "Explicit paused resume sends one control and one bounded drive request");
+        assert.equal(await recoveryPage.locator("#wm-recovery-banner").isVisible(), false, "Recovery banner closes after explicit resume");
+        recoveryPage.off("dialog", pausedDialogHandler);
+
+        recoveryRun = makeRecoveryRun("running");
+        recoveryRequestIds.length = 0;
+        await recoveryPage.reload();
+        await recoveryPage.locator("#wm-recovery-banner").waitFor({ state: "visible" });
+        assert.equal(await recoveryPage.locator("#wm-recovery-primary").innerText(), "Take over processing here");
+        assert.match(await recoveryPage.locator("#wm-recovery-description").innerText(), /Another tab may be processing it/);
+        assert.deepEqual(recoveryRequestIds, [], "Watching a running unfinished run schedules no batches");
+        const takeOverDialog = new Promise(resolve => recoveryPage.once("dialog", async dialog => {
+            assert.match(dialog.message(), /Another browser tab may still be processing this run/, "Running take-over explains the multi-tab risk");
+            await dialog.dismiss(); resolve();
+        }));
+        await recoveryPage.locator("#wm-recovery-primary").click();
+        await takeOverDialog;
+        assert.deepEqual(recoveryRequestIds, [], "Declining take-over does not control or drive the run");
+        assert.equal(await recoveryPage.locator("#wm-recovery-banner").isVisible(), true, "Declined take-over keeps the recovery prompt available");
+        const acceptTakeOver = new Promise(resolve => recoveryPage.once("dialog", async dialog => { await dialog.accept(); resolve(); }));
+        await recoveryPage.locator("#wm-recovery-primary").click();
+        await acceptTakeOver;
+        await recoveryPage.waitForFunction(() => document.getElementById("wm-progress-label").textContent.includes("preview_finished"));
+        assert.deepEqual(recoveryRequestIds, ["control:resume", "drive"], "Confirmed take-over schedules batches only in this tab");
+        assert.equal(await recoveryPage.locator("#wm-recovery-banner").isVisible(), false, "Recovery banner closes after confirmed take-over");
+        assert.deepEqual(recoveryErrors, [], "Recovery pages have no browser JavaScript errors");
+        await recoveryPage.close();
+        recoveryRun = null;
+        console.log("PASS: startup recovery reopens Step 4 for paused/running non-dry runs, schedules no batches automatically, requires explicit take-over confirmation for running runs, and offers a clean source-choice escape");
+
         const livePage = await browser.newPage();
         await livePage.goto("http://fossbill.test/admin/whmcstofossbilling");
         await livePage.waitForLoadState("networkidle");

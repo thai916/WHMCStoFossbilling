@@ -57,12 +57,47 @@ is not reused: activate the newly named module and review its permissions.
   keeps the 32-character lowercase hex idempotency key that prevents duplicate
   batch processing.
 - Step 4 no longer sends a status request after every 50-record batch. Each
-  bounded drive request processes several idempotent server-side batches and
-  returns the full run status, then the wizard waits about eight seconds before
-  the next call. This stays under FOSSBilling's shared hourly API limiter, which
-  counts every authenticated admin request twice. A 429 response stops polling,
-  shows the server's `Retry-After` wait and never retries automatically; core
-  rate-limit settings are not changed.
+  bounded drive request processes up to four idempotent server-side batches
+  within a 15-second server budget and returns the full run status, then the
+  wizard waits about eight seconds before the next call. This stays under
+  FOSSBilling's shared hourly API limiter, which counts every authenticated
+  admin request twice. A 429 response stops polling, shows the server's
+  `Retry-After` wait and never retries automatically; core rate-limit settings
+  are not changed.
+- Row sizing now adapts from a conservative 500 rows using measured elapsed time
+  and source-page bytes. Fast, small batches grow toward a hard maximum of
+  2,000; batches near the five-second work cap or 8 MiB page budget shrink, and
+  empty batches back off. The last measured decision persists across drive
+  calls, while replaying an identical drive request still returns its original
+  result. The five-second per-batch work cap, 8 MiB page budget, source locks,
+  cursors and 32-hex idempotency guards are unchanged. This is not a measured
+  production throughput guarantee.
+
+## Imported visibility and repair
+
+- Native hosting imports now set `client_order.group_master=1`; core order lists
+  default to `hide_addons=1` and otherwise filter imported services out.
+- Eligible historical invoices now set `invoice.approved=1`; the core client
+  invoice API forces `approved=true`. Only paid/canceled/refunded invoices are
+  published, so approval grants list visibility without creating a payable
+  state. Canceled/refunded history remains administrator-visible because the
+  client portal only has Paid/Unpaid tabs.
+- Imports from earlier 0.2 builds can be repaired from Step 4 with the exact
+  phrase `REPAIR IMPORTED VISIBILITY`. The confirmed action is scoped to the
+  selected run/source, changes only those two flags on verified module-owned
+  records, refreshes module-owned checksums and is idempotent. It does not
+  re-import, delete, renumber, notify, change statuses or touch core schema.
+
+## Session-timeout recovery
+
+- On page load, the newest non-dry `running`/`paused` run opens Step 4 directly
+  with an **Unfinished import found** banner. No batch is scheduled, retried or
+  repaired automatically.
+- Paused work offers **Resume this import**. Work still marked `running` offers
+  **Take over processing here** with an explicit confirmation because another
+  tab may still be processing it; declining changes nothing.
+- **Choose another source** escapes the recovery prompt without altering the
+  run. `requires_action` runs remain selectable but do not trigger the banner.
 
 ## Historical dates and progress
 
@@ -141,11 +176,12 @@ API is verified to return `Authentication Failed`/201 before source access.
   count reads, even when new authorization fields are empty. Saved plans and
   authorizations remain unchanged; mode/table/date-policy/mapping/schema/timezone
   differences are explained. Paused runs still need explicit Resume processing.
-- A running existing run is watched with read-only status requests every 2.5
-  seconds while its progress screen is open. This does not schedule batches or
-  prove another worker is active. Use Resume processing explicitly if processing
-  needs to continue in this tab. Hidden tabs skip status reads; navigation,
-  processing in this tab and errors stop observation.
+- A running existing run is watched with read-only status requests about every
+  10 seconds while its progress screen is open. This does not schedule batches
+  or prove another worker is active. Use Resume processing, or the startup
+  take-over prompt, explicitly if processing needs to continue in this tab.
+  Hidden tabs skip status reads; navigation, processing in this tab and errors
+  stop observation.
 - Cancellation/replacement is an explicit confirmed action. Previously imported
   records and preserved evidence are never deleted or rolled back unless the
   administrator separately supplies the irreversible overwrite confirmation in

@@ -74,12 +74,16 @@ final class InvoiceImporter
         $due = EventDate::utc($row['duedate'] ?? null, $this->timezone);
         $paid = empty($row['datepaid']) || str_starts_with((string) $row['datepaid'], '0000-00-00') ? null : EventDate::utc($row['datepaid'], $this->timezone);
         if ($status === 'paid' && $paid === null) throw new SafeException('Paid invoice has no valid original payment date.');
+        // The client invoice API always forces approved=true. Eligible historical
+        // invoices are non-unpaid, so approval only makes them visible; it does
+        // not add a payable/actionable state.
+        $approved = in_array($status, ['paid', 'canceled', 'refunded'], true) ? 1 : 0;
         $id = $this->p->insert('invoice', [
             'client_id' => $client, 'serie' => $series, 'nr' => $nativeNumber,
             'hash' => bin2hex(random_bytes(32)), 'hash_expires_at' => '1970-01-01 00:00:00',
             'currency' => $currency, 'currency_rate' => isset($row['currency_rate']) ? Decimal::money($row['currency_rate'], 6) : null,
             'credit' => Decimal::money($row['credit'] ?? '0'), 'status' => $status,
-            'approved' => 0, 'gateway_id' => null, 'taxname' => $tax === '0.00' ? null : 'Legacy tax',
+            'approved' => $approved, 'gateway_id' => null, 'taxname' => $tax === '0.00' ? null : 'Legacy tax',
             'taxrate' => $rate,
             // Original notes may have unknown visibility and remain in the private archive.
             'notes' => 'Historical WHMCS record. Original number: ' . Sanitizer::text($number !== '' ? $number : $key) . '. Original seller/buyer legal billing snapshots may be unavailable; this is not a reissued legal invoice.',

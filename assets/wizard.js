@@ -5,7 +5,7 @@
     if (!root) return;
     const $ = id => document.getElementById(`wm-${id}`);
     let source = null, profile = null, defaultProfile = null, run = null, pumping = false, preparing = false;
-    let observer = null, replacement = null, watchVersion = 0;
+    let observer = null, replacement = null, watchVersion = 0, startupRecoveryDone = false;
     let chosenKind = null, needUpgrade = false, backup = null, backupFile = null, backupPaused = false;
     const counts = new Map();
     function timing(name, fallback) {
@@ -61,6 +61,15 @@
         $("preparation-bar").classList.remove("wm-working", "wm-indeterminate");
     }
     function stopWatching() { clearTimeout(observer); observer = null; ++watchVersion; }
+    function hideRecovery() { $("recovery-banner").classList.add("d-none"); }
+    function showSourceChoice() {
+        pumping = false; stopWatching(); hideRecovery();
+        chosenKind = null; $("source-choice").classList.remove("d-none");
+        root.querySelectorAll("[data-panel]").forEach(panel => panel.classList.add("d-none"));
+        $("navigation").classList.add("d-none"); $("limits").classList.add("d-none"); $("schema-warning").classList.add("d-none");
+        $("notice").classList.add("d-none"); $("preparation").classList.add("d-none"); $("top-progress").classList.add("d-none");
+        scrollToTop();
+    }
     function hideOverwrite() {
         $("overwrite-panel").classList.add("d-none");
         $("overwrite-acknowledged").checked = false;
@@ -198,6 +207,11 @@
         }
         if (source) $("sources").value = String(source.source_id);
         if (run) $("runs").value = run.id;
+        if (!startupRecoveryDone) {
+            startupRecoveryDone = true;
+            const unfinished = data.runs.find(row => row.mode !== "dry_run" && ["running", "paused"].includes(row.status));
+            if (unfinished) await openUnfinished(unfinished);
+        }
     }
     $("schema-upgrade").addEventListener("click", handle(async () => {
         if (!window.confirm("Create missing whmcstofossbilling_* tables only? No core schema or business records will change.")) return;
@@ -251,12 +265,9 @@
     }
     $("change-source").addEventListener("click", handle(async () => {
         if (preparing || pumping) throw new Error("Wait for preparation or pause processing before changing source type.");
-        chosenKind = null; $("source-choice").classList.remove("d-none");
-        root.querySelectorAll("[data-panel]").forEach(panel => panel.classList.add("d-none"));
-        $("navigation").classList.add("d-none"); $("limits").classList.add("d-none"); $("schema-warning").classList.add("d-none");
-        $("notice").classList.add("d-none"); $("preparation").classList.add("d-none"); $("top-progress").classList.add("d-none");
-        scrollToTop();
+        showSourceChoice();
     }));
+    $("recovery-choose-source").addEventListener("click", () => { showSourceChoice(); });
     function uploadProgress(data) {
         const phase = data.phase;
         let percent = null, text;
@@ -633,8 +644,29 @@
             notice("Selected table counts captured, including required dependencies. They are not a transactionally consistent whole-database snapshot.");
         } finally { preparing = false; stopPreparation(); }
     }));
+    async function openUnfinished(candidate) {
+        pumping = false; stopWatching(); replacement = null;
+        const status = await api("run_status", { run_id: candidate.id });
+        if (!["running", "paused"].includes(status.status)) return;
+        run = status;
+        $("runs").value = run.id;
+        $("existing-run").classList.add("d-none");
+        renderRun();
+        const running = run.status === "running";
+        $("recovery-description").textContent = running
+            ? `This ${run.mode} import is still marked running. Another tab may be processing it; this tab will only watch status until you explicitly take over. No batches were scheduled automatically.`
+            : `This ${run.mode} import is paused with committed work intact. Review its progress below, then explicitly resume when you are ready. No batches were scheduled automatically.`;
+        $("recovery-primary").textContent = running ? "Take over processing here" : "Resume this import";
+        $("recovery-banner").classList.remove("d-none");
+        $("source-choice").classList.add("d-none");
+        $("navigation").classList.remove("d-none");
+        $("limits").classList.remove("d-none");
+        step("progress");
+        scrollToTop();
+        notice("An unfinished import was found. You are on Step 4; no automatic resume was attempted.");
+    }
     async function openExisting(existing, request) {
-        pumping = false; stopWatching();
+        pumping = false; stopWatching(); hideRecovery();
         run = existing.run;
         replacement = { ...request, runId: run.id };
         $("existing-run").classList.remove("d-none");
@@ -669,7 +701,7 @@
             if (source?.source_id !== sourceId) throw new Error("The selected source changed. Review the source and tables before trying again. No run was created.");
             preparation("Creating your paused run…");
             run = await api("run_create", { source_id: sourceId, tables: selection, mode, ...extra, target_mode: target });
-            replacement = null; stopWatching(); $("existing-run").classList.add("d-none");
+            replacement = null; stopWatching(); hideRecovery(); $("existing-run").classList.add("d-none");
             $("preparation").classList.add("d-none");
             // Reveal the successful run even if refreshing the dashboard subsequently fails.
             renderRun(); step("progress");
@@ -792,7 +824,7 @@
         run = await api("run_status", { run_id: run.id }); renderRun();
     }
     $("runs").addEventListener("change", handle(async () => {
-        pumping = false; stopWatching(); replacement = null; $("existing-run").classList.add("d-none");
+        pumping = false; stopWatching(); replacement = null; hideRecovery(); $("existing-run").classList.add("d-none");
         if (!$("runs").value) return;
         run = { id: $("runs").value }; await refreshRun(); watchRun();
     }));
@@ -803,13 +835,23 @@
         await refreshRun();
         notice(`Retried ${result.attempted} records. Each record is limited to five total attempts; unresolved conflicts require manual action.${result.status === "paused" ? " Resume to refresh the financial assessment after successful retries." : ""}`);
     }));
-    $("resume").addEventListener("click", handle(async () => {
+    $("repair-visibility").addEventListener("click", handle(async () => {
+        if (!run || pumping) throw new Error("Select the imported run before repairing visibility.");
+        const phrase = $("repair-confirm").value.trim();
+        if (!$("repair-acknowledged").checked || phrase !== "REPAIR IMPORTED VISIBILITY") throw new Error("Acknowledge the limited field change and type REPAIR IMPORTED VISIBILITY exactly. No records were changed.");
+        if (!window.confirm("Repair visibility flags on module-owned records from this run only? No records will be deleted or re-imported.")) return;
+        const result = await api("run_repair_visibility", { run_id: run.id, confirmation: phrase });
+        $("repair-acknowledged").checked = false; $("repair-confirm").value = "";
+        await refreshRun();
+        notice(`Repaired ${result.orders} imported hosting orders and ${result.invoices} imported invoices. No records were deleted or re-imported.`);
+    }));
+    async function resumeCurrentRun() {
         if (!run || pumping) throw new Error("Select a paused/running run. This tab must not already be processing.");
         stopWatching();
         run = await api("run_control", { run_id: run.id, action: "resume" });
         pumping = true; renderRun();
         while (pumping && run.status === "running") {
-            run = await api("run_drive", { run_id: run.id, drive_id: batchRequestId(), budget_ms: 9000, limit: 100 });
+            run = await api("run_drive", { run_id: run.id, drive_id: batchRequestId(), budget_ms: 15000, limit: 500 });
             renderRun();
             if (run.status !== "running") break;
             const pause = timing("driveInterval", 8000);
@@ -817,6 +859,13 @@
         }
         pumping = false; stopWatching();
         notice("Batch scheduling stopped. Review status and exceptions; this is not a declaration of a complete migration.");
+    }
+    $("resume").addEventListener("click", handle(resumeCurrentRun));
+    $("recovery-primary").addEventListener("click", handle(async () => {
+        if (!run || !["running", "paused"].includes(run.status)) throw new Error("Select an unfinished run before resuming.");
+        if (run.status === "running" && !window.confirm("Another browser tab may still be processing this run. Take over scheduling batches here? Committed records remain intact and no work is rolled back.")) return;
+        await resumeCurrentRun();
+        hideRecovery();
     }));
     ["pause", "cancel"].forEach(action => $(action).addEventListener("click", handle(async () => {
         pumping = false;

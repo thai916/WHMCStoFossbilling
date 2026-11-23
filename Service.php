@@ -6,9 +6,11 @@ namespace Box\Mod\Whmcstofossbilling;
 
 use Box\Mod\Whmcstofossbilling\Destination\NativeWriter;
 use Box\Mod\Whmcstofossbilling\Destination\Store;
+use Box\Mod\Whmcstofossbilling\Destination\VisibilityRepair;
 use Box\Mod\Whmcstofossbilling\Installation\Schema;
 use Box\Mod\Whmcstofossbilling\Mapping\Profile;
 use Box\Mod\Whmcstofossbilling\Migration\Engine;
+use Box\Mod\Whmcstofossbilling\Migration\BatchSizer;
 use Box\Mod\Whmcstofossbilling\Migration\Dependencies;
 use Box\Mod\Whmcstofossbilling\Finance\Reconciler;
 use Box\Mod\Whmcstofossbilling\Migration\Planner;
@@ -434,13 +436,21 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
      * every authenticated admin call twice (pre-auth IP plus account), so
      * browser-side per-batch polling exhausts the shared hourly limiter.
      */
-    public function drive(string $run, string $request, int $budgetMs = 9000, int $limit = 100): array
+    public function drive(string $run, string $request, int $budgetMs = 15000, int $limit = BatchSizer::START_ROWS): array
     {
         if (!preg_match('/\A[a-f0-9]{32}\z/D', $request)) throw new SafeException('Invalid drive request identifier.');
-        if ($budgetMs < 1000 || $budgetMs > 15000 || $limit < 1 || $limit > 100) throw new SafeException('Invalid drive budget or batch size.');
+        if ($budgetMs < 1000 || $budgetMs > 15000 || $limit < BatchSizer::MIN_ROWS || $limit > BatchSizer::MAX_ROWS) throw new SafeException('Invalid drive budget or batch size.');
         $store = $this->store();
         $cached = $store->one('SELECT result_json FROM whmcstofossbilling_batch WHERE run_id=? AND request_id=?', [$run, $request]);
         if ($cached) return json_decode($cached['result_json'], true, 512, JSON_THROW_ON_ERROR);
+
+        // The most recent durable batch result carries the last measured sizing
+        // decision. Replays of this exact drive request return the cached result
+        // above, so an idempotent retry cannot double-apply a batch.
+        $latest = $store->one('SELECT result_json FROM whmcstofossbilling_batch WHERE run_id=? ORDER BY id DESC LIMIT 1', [$run]);
+        $previous = $latest ? json_decode($latest['result_json'], true, 128, JSON_THROW_ON_ERROR) : null;
+        $limit = BatchSizer::initial($limit, $previous);
+        $currentLimit = $limit;
 
         $engine = new Engine($store, $this->vault());
         $processed = 0;
@@ -449,9 +459,12 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         $status = $store->run($run)['status'];
         while ($status === 'running' && $batches < 4 && (microtime(true) - $started) * 1000 < $budgetMs) {
             $derived = substr(hash('sha256', $request . ':' . $batches), 0, 32);
-            $result = $engine->batch($run, $derived, $limit);
+            $result = $engine->batch($run, $derived, $currentLimit);
             $processed += (int) ($result['batch_processed'] ?? 0);
             $status = (string) $result['status'];
+            if (isset($result['next_limit']) && is_numeric($result['next_limit'])) {
+                $currentLimit = BatchSizer::clamp((int) $result['next_limit']);
+            }
             ++$batches;
             // Reconciliation and credit publication report zero processed rows;
             // return instead of spinning through the same no-op inside one call.
@@ -461,6 +474,8 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         $result = $this->status($run);
         $result['batch_processed'] = $processed;
         $result['batches'] = $batches;
+        $result['batch_limit'] = $limit;
+        $result['next_limit'] = $currentLimit;
         $store->execute('INSERT INTO whmcstofossbilling_batch (run_id,request_id,result_json,created_at) VALUES (?,?,?,UTC_TIMESTAMP())', [$run, $request, Store::json($result)]);
 
         return $result;
@@ -469,6 +484,14 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
     public function retry(string $run): array
     {
         return (new Engine($this->store(), $this->vault()))->retry($run);
+    }
+
+    public function repairVisibility(array $input): array
+    {
+        return (new VisibilityRepair($this->store()))->run((string) ($input['confirmation'] ?? ''), [
+            'run_id' => (string) ($input['run_id'] ?? ''),
+            'source_id' => (int) ($input['source_id'] ?? 0),
+        ]);
     }
 
     public function status(string $id): array

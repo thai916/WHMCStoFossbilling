@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Box\Mod\Whmcstofossbilling\Source;
 
+use Box\Mod\Whmcstofossbilling\Migration\BatchSizer;
 use Box\Mod\Whmcstofossbilling\Security\SafeException;
 use Box\Mod\Whmcstofossbilling\Security\Sensitive;
 
@@ -154,7 +155,7 @@ final class Reader
     public function page(string $name, array $definition, string $after, string $maximum, int $limit): array
     {
         $this->assertReadable($name, $definition);
-        if (!ctype_digit($after) || !ctype_digit($maximum) || $limit < 1 || $limit > 100) {
+        if (!ctype_digit($after) || !ctype_digit($maximum) || $limit < BatchSizer::MIN_ROWS || $limit > BatchSizer::MAX_ROWS) {
             throw new SafeException('Invalid source batch cursor.');
         }
         $columns = array_keys(array_filter($definition['columns'], static fn (array $column): bool => !$column['sensitive']));
@@ -172,7 +173,7 @@ final class Reader
         $sizesStatement = $this->pdo->prepare('SELECT ' . $this->hint() . "$key AS row_key,$sum AS row_bytes,$max AS field_bytes FROM " . self::identifier($name) . " WHERE $key > ? AND $key <= ? ORDER BY $key LIMIT " . $limit);
         $sizesStatement->execute([$after, $maximum]);
         $candidates = $sizesStatement->fetchAll();
-        if (!$candidates) return ['rows' => [], 'exhausted' => true];
+        if (!$candidates) return ['rows' => [], 'exhausted' => true, 'bytes' => 0];
         $budget = self::byteBudget();
         $selected = [];
         $bytes = 0;
@@ -204,7 +205,7 @@ final class Reader
             $rows[] = $byKey[$id] ?? [$definition['key'] => $id, '__wm_missing' => 1];
         }
 
-        return ['rows' => $rows, 'exhausted' => count($candidates) < $limit && count($selected) === count($candidates)];
+        return ['rows' => $rows, 'exhausted' => count($candidates) < $limit && count($selected) === count($candidates), 'bytes' => $bytes];
     }
 
     private static function byteBudget(): int
