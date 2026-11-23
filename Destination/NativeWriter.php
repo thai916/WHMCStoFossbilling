@@ -27,9 +27,12 @@ final class NativeWriter
         'hosting' => 'client_order',
     ];
 
-    private ?string $dateFallbackOriginal = null;
+    public const MISSING_CURRENCY_CLIENT = InvoiceImporter::MISSING_CURRENCY_CLIENT;
 
-    public function __construct(private readonly Store $store, private readonly int $source, private readonly string $prefix, private readonly ?string $timezone = null, private readonly ?string $invalidDateFallback = null)
+    private ?string $dateFallbackOriginal = null;
+    private ?string $currencyInference = null;
+
+    public function __construct(private readonly Store $store, private readonly int $source, private readonly string $prefix, private readonly ?string $timezone = null, private readonly ?string $invalidDateFallback = null, private readonly ?string $missingInvoiceCurrency = null)
     {
     }
 
@@ -46,6 +49,11 @@ final class NativeWriter
     public function dateFallbackOriginal(): ?string
     {
         return $this->dateFallbackOriginal;
+    }
+
+    public function currencyInference(): ?string
+    {
+        return $this->currencyInference;
     }
 
     public static function date(mixed $value): ?string
@@ -66,10 +74,17 @@ final class NativeWriter
     public function import(string $suffix, array $row, array $rules, string $checksum, string $run): string
     {
         $this->dateFallbackOriginal = null;
+        $this->currencyInference = null;
         if (isset(HistoryImporter::ENTITIES[$suffix])) {
             return (new HistoryImporter($this->store, $this->source, $this->prefix, $this->timezone))->import($suffix, $row, $checksum, $run);
         }
-        if ($suffix === 'invoices') return (new InvoiceImporter($this->store, $this->source, $this->prefix, $this->timezone))->import($row, $checksum, $run);
+        if ($suffix === 'invoices') {
+            $invoice = new InvoiceImporter($this->store, $this->source, $this->prefix, $this->timezone, $this->missingInvoiceCurrency);
+            $status = $invoice->import($row, $checksum, $run);
+            $this->currencyInference = $invoice->currencyInference();
+
+            return $status === 'imported' && $this->currencyInference !== null ? 'currency_inference' : $status;
+        }
         if ($suffix === 'accounts') return (new PaymentImporter($this->store, $this->source, $this->prefix, $this->timezone))->import($row, $checksum, $run);
         if ($suffix === 'hosting') return (new HostingImporter($this->store, $this->source, $this->prefix, $this->timezone))->import($row, $checksum, $run);
         if (in_array($suffix, ['products', 'addons'], true)) {

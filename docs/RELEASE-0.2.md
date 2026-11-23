@@ -88,6 +88,29 @@ is not reused: activate the newly named module and review its permissions.
   records, refreshes module-owned checksums and is idempotent. It does not
   re-import, delete, renumber, notify, change statuses or touch core schema.
 
+## Nullable hosting references and opt-in invoice currency
+
+- Historical hosting records without a package-name plan or assigned server now
+  publish with the corresponding native reference set to `NULL`. Both
+  `service_hosting` reference columns are nullable; no synthetic plan or server
+  is created. The original source references remain in the private archive and
+  in the native order metadata. Active/suspended/pending hosting remains blocked.
+- Historical invoices with a NULL/empty source currency remain blocked by
+  default. A newly authorized run can explicitly tick **linked client currency**
+  (`missing_invoice_currency = client_currency`) to use the linked client's
+  currency from the same WHMCS import. This is an inference, not a source-stated
+  invoice currency. The original NULL stays archived, the native note warns about
+  the inference, **Inferred invoice currencies** shows the total and the first 100
+  records, and the full JSON/CSV report records the policy and every inference.
+  Exception-only downloads remain failed-record-only. Amounts, tax, totals and
+  exchange rates are not recalculated. Existing runs
+  keep blocking these invoices; the policy is frozen into a newly created plan.
+  Other unknown/ambiguous currencies remain blocked.
+- Step 4 failed-record JSON/CSV downloads now stream every failed record for the
+  selected run instead of building the whole response in memory, so a large
+  exception set does not hit the previous timeout. Successful records are still
+  summarized rather than streamed.
+
 ## Session-timeout recovery
 
 - On page load, the newest non-dry `running`/`paused` run opens Step 4 directly
@@ -174,8 +197,9 @@ API is verified to return `Authentication Failed`/201 before source access.
 - Creating an authorized run first checks for an unfinished non-preview run for
   that source. The wizard opens it automatically before mapping saves or source
   count reads, even when new authorization fields are empty. Saved plans and
-  authorizations remain unchanged; mode/table/date-policy/mapping/schema/timezone
-  differences are explained. Paused runs still need explicit Resume processing.
+  authorizations remain unchanged; mode/table/date-policy/missing-currency-policy/
+  mapping/schema/timezone differences are explained. Paused runs still need
+  explicit Resume processing.
 - A running existing run is watched with read-only status requests about every
   10 seconds while its progress screen is open. This does not schedule batches
   or prove another worker is active. Use Resume processing, or the startup
@@ -254,7 +278,9 @@ Uninstall is not rollback; preserve backups and audit records.
 
 All existing production blockers remain: active services, domains, unpaid/draft
 invoices and unsupported financial/allocation/FX cases are not made production-safe
-by these connection fixes. Do not cut over billing.
+by these connection fixes. The opt-in linked-client currency policy applies only to
+NULL source invoice currency, is disclosed as an inference and is not a general
+currency-inference mechanism. Do not cut over billing.
 
 Read [connection and HostGator instructions](CONNECTIONS.md),
 [testing](TESTING.md) and [remaining work](REMAINING-WORK.md).

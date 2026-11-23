@@ -50,6 +50,20 @@ final class Persistence
         return (int) $mapping['destination_id'];
     }
 
+    /**
+     * Nullable dependencies: WHMCS uses 0/empty for "no server" and "no package".
+     * An absent mapping stays null; a present mapping is still drift-checked.
+     */
+    public function optional(string $suffix, string $key, string $entity): ?int
+    {
+        if ($key === '' || $key === '0') return null;
+        $mapping = $this->mapping($suffix, $key, $entity);
+        if (!$mapping || !$mapping['destination_id']) return null;
+        $this->verify($mapping);
+
+        return (int) $mapping['destination_id'];
+    }
+
     public function verify(array $mapping): void
     {
         $entity = $mapping['destination_entity'];

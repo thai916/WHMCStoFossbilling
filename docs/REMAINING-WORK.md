@@ -11,12 +11,13 @@ The requested complete WHMCS 8.x migration is not finished. Do not interpret the
 
 ## Core native migration
 
-- **Implemented/tested:** native base-currency product cycles/setup fees, free/one-time modes, add-ons and parent links; preserved independent currency matrices; inactive credential-free server metadata; explicit package names and unambiguous server groups.
+- **Implemented/tested:** native base-currency product cycles/setup fees, free/one-time modes, add-ons and parent links; preserved independent currency matrices; inactive credential-free server metadata; explicit package names and unambiguous server groups. Historical services with no package-name plan or assigned server publish NULL references rather than invented plan/server records; the original references remain archived and in native order metadata.
 - **Still needed:** active configurable options, independently fixed currency prices in the native catalog, administrator-reviewed module-specific package-slot mappings and ambiguous server-group choices.
 - **Implemented/tested:** inactive hosting service/order aggregates with usernames/IPs/dates/prices, exact original status metadata and safe native canceled state.
 - **Blocked:** active/suspended/pending services and every native domain order until their operational safety is established.
 - **Implemented/tested:** exactly representable non-unpaid historical invoices/lines, separate legacy numbering/search, processed payments/refunds, multiple payments per invoice, complete credit aggregates and exact per-currency snapshot assessments.
-- **Still needed:** unpaid/draft isolation, compound taxes/discount variants, confirmed currency inference when WHMCS lacks explicit invoice currency, complete legal billing snapshots and historical FX/income handling.
+- **Implemented/tested:** an explicit opt-in linked-client currency policy for historical invoices whose source currency is NULL/empty. The original NULL remains archived, the native note warns about the inference, the UI counts every inference and lists the first 100, the full JSON/CSV report contains every inference, and amounts/tax/FX are not recalculated. Existing runs without the frozen policy still block these invoices.
+- **Still needed:** unpaid/draft isolation, compound taxes/discount variants, source-stated resolution for other ambiguous/unknown currencies, complete legal billing snapshots and historical FX/income handling. The linked-client policy is not a general currency-inference mechanism.
 - **Still needed:** fees in native reporting, unallocated/multi-invoice allocations, simultaneous in/out movements, large staged aggregates and complete outstanding-balance reconstruction.
 - **Implemented/tested:** rejecting a mismatched credit ledger without partial posting or invented opening credit; repeated imports do not double-count balances.
 - Contact/shared-user ownership and reviewed secret-aware custom-field extraction.
@@ -58,4 +59,4 @@ The requested complete WHMCS 8.x migration is not finished. Do not interpret the
 
 The user subsequently explicitly requested committing and creating public repository `thai916/Whmcstofossbilling`. Publication is permitted as an **experimental development preview**, not as the originally requested production-complete migration. Tag/release `0.1` must be marked as a prerelease and retain the incomplete-scope warning. See [release notes](RELEASE-0.1.md). Production acceptance criteria above remain unmet regardless of repository/release existence.
 
-The overwritten 0.2 connection-bug-fix artifact is likewise explicitly authorized as an experimental prerelease. Its standard-by-default TLS policy, cPanel grant recognition and administrator-selected timezone do not resolve the production blockers above. See [0.2 notes](RELEASE-0.2.md).
+The overwritten 0.2 connection-bug-fix artifact is likewise explicitly authorized as an experimental prerelease. Its standard-by-default TLS policy, cPanel grant recognition and administrator-selected timezone do not resolve the production blockers above. Later local 0.2 source changes add nullable historical plan/server references, streamed failed-record exception exports and an opt-in linked-client currency policy for NULL-currency invoices; none of these makes the blocked categories production-safe. See [0.2 notes](RELEASE-0.2.md).

@@ -28,6 +28,12 @@ final class Exporter
             throw new SafeException('Reports support JSON and CSV only.');
         }
         $run = $this->service->status($runId);
+        $store = $this->service->store();
+        // The status view intentionally caps its UI list; the full report must not.
+        // Exception-only exports remain failed-record-only, so successful inference
+        // disclosures are omitted there while their total remains available.
+        $currencyInferenceTotal = (int) $store->one("SELECT COUNT(*) AS n FROM whmcstofossbilling_attempt WHERE run_id=? AND status='currency_inference'", [$runId])['n'];
+        $currencyInferences = $exceptionsOnly ? [] : $store->all("SELECT table_name,source_key,message AS disclosure FROM whmcstofossbilling_attempt WHERE run_id=? AND status='currency_inference' ORDER BY id", [$runId]);
         // No payloads, names, email addresses, credentials, notes or backup references in reports.
         $summary = [
             'run_id' => $runId, 'mode' => $run['mode'], 'status' => $run['status'],
@@ -37,9 +43,11 @@ final class Exporter
             'count_scope' => 'Counts were captured per table, not from a cross-request consistent snapshot.',
             'preview' => $run['mode'] === 'dry_run',
             'scope' => $exceptionsOnly ? 'failed_records_only' : 'all_records',
+            'missing_invoice_currency_policy' => $run['plan']['missing_invoice_currency'] ?? null,
+            'currency_inference_total' => $currencyInferenceTotal,
+            'currency_inferences' => $currencyInferences,
             'product_pricing' => $run['product_pricing'], 'credit_publication' => $run['credit_publication'],
         ];
-        $store = $this->service->store();
         $fullRun = $store->run($runId);
         $schema = json_decode($fullRun['schema_json'], true, 128, JSON_THROW_ON_ERROR);
         $mapping = json_decode($fullRun['mapping_json'], true, 128, JSON_THROW_ON_ERROR);
@@ -67,6 +75,9 @@ final class Exporter
                     foreach ($totals as $total) {
                         fputcsv($output, array_map(self::csvCell(...), ['financial_snapshot', '', '', '', '', $summary['reconciliation']['status'], '', '', '', '', '', '', $metric, $total['currency'], $total['source_total'], $total['native_total'], $total['source_records'], $total['native_records']]), ',', '"', '');
                     }
+                }
+                foreach ($summary['currency_inferences'] ?? [] as $inference) {
+                    fputcsv($output, array_map(self::csvCell(...), ['currency_inference', $inference['table_name'], $inference['source_key'], '', '', $summary['status'], '', '', '', '', '', '', $inference['disclosure'], '', '', '', '', '']), ',', '"', '');
                 }
             }
             $after = 0;

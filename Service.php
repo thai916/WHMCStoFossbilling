@@ -288,6 +288,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         if ($mode !== $saved['mode']) $differences[] = 'execution mode';
         if ($selection !== $savedTables) $differences[] = 'selected tables';
         if (($plan['invalid_date_fallback'] ?? null) !== (($input['invalid_date_fallback'] ?? '') === '1900' ? NativeWriter::DATE_FALLBACK : null)) $differences[] = 'invalid-date policy';
+        if (($plan['missing_invoice_currency'] ?? null) !== (($input['missing_invoice_currency'] ?? '') === NativeWriter::MISSING_CURRENCY_CLIENT ? NativeWriter::MISSING_CURRENCY_CLIENT : null)) $differences[] = 'missing-invoice-currency policy';
         try {
             $mapping = Profile::validate($input['profile'] ?? json_decode($source['mapping_json'], true, 128, JSON_THROW_ON_ERROR), $schema);
             if (Store::json($mapping) !== $saved['mapping_json']) $differences[] = 'field mappings';
@@ -331,6 +332,10 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         if ($invalidFallback !== '' && $invalidFallback !== '1900') {
             throw new SafeException('Unknown invalid-date policy. Only the explicit 1900 fallback is available.');
         }
+        $missingCurrency = (string) ($input['missing_invoice_currency'] ?? '');
+        if ($missingCurrency !== '' && $missingCurrency !== NativeWriter::MISSING_CURRENCY_CLIENT) {
+            throw new SafeException('Unknown missing-invoice-currency policy. Only the explicit linked-client policy is available.');
+        }
         $target = $mode === 'dry_run' ? (string) ($input['target_mode'] ?? 'reference_native') : $mode;
         if (!in_array($target, ['archive', 'reference_native', 'historical_native'], true)) throw new SafeException('Unknown dry-run target mode.');
         $selection = $input['tables'] ?? [];
@@ -371,6 +376,7 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         $plan['source_prefix'] = $options['prefix'];
         $plan['adapter_revision'] = 2;
         $plan['invalid_date_fallback'] = $invalidFallback === '1900' ? NativeWriter::DATE_FALLBACK : null;
+        $plan['missing_invoice_currency'] = $missingCurrency === NativeWriter::MISSING_CURRENCY_CLIENT ? $missingCurrency : null;
         $plan['target_mode'] = $target;
         $plan['native_entities'] = $target === 'archive' ? [] : NativeWriter::ENTITIES;
         if ($target !== 'historical_native') unset($plan['native_entities']['invoices'], $plan['native_entities']['accounts'], $plan['native_entities']['hosting']);
@@ -503,6 +509,8 @@ final class Service implements \FOSSBilling\InjectionAwareInterface
         $run['categories'] = $this->store()->all('SELECT table_name,expected,maximum,after_id,processed,imported,archived,skipped,failed,status FROM whmcstofossbilling_cursor WHERE run_id=? ORDER BY id', [$id]);
         $run['errors'] = $this->store()->all("SELECT table_name,source_key,error_type,message,retryable,attempts FROM whmcstofossbilling_attempt WHERE run_id=? AND status='failed' ORDER BY id LIMIT 100", [$id]);
         $run['date_fallbacks'] = $this->store()->all("SELECT table_name,source_key,message AS original_value FROM whmcstofossbilling_attempt WHERE run_id=? AND status='date_fallback' ORDER BY id LIMIT 100", [$id]);
+        $run['currency_inferences'] = $this->store()->all("SELECT table_name,source_key,message AS disclosure FROM whmcstofossbilling_attempt WHERE run_id=? AND status='currency_inference' ORDER BY id LIMIT 100", [$id]);
+        $run['currency_inference_total'] = (int) $this->store()->one("SELECT COUNT(*) AS n FROM whmcstofossbilling_attempt WHERE run_id=? AND status='currency_inference'", [$id])['n'];
         $run['reconciliation'] = (new Reconciler($this->store()))->summary($id);
         $run['product_pricing'] = $this->store()->all('SELECT currency,native_applied,COUNT(*) AS price_rows FROM whmcstofossbilling_price WHERE run_id=? GROUP BY currency,native_applied ORDER BY currency', [$id]);
         $run['credit_publication'] = $this->store()->all('SELECT source_key,status,message,attempts FROM whmcstofossbilling_credit_result WHERE run_id=? ORDER BY source_key LIMIT 100', [$id]);

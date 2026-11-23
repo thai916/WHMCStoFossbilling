@@ -29,10 +29,16 @@ final class HostingImporter
         }
         $client = $p->resolve('clients', (string) ($row['userid'] ?? ''), 'client');
         $product = $p->resolve('products', (string) ($row['packageid'] ?? ''), 'product');
-        $server = $p->resolve('servers', (string) ($row['server'] ?? ''), 'service_hosting_server');
-        $plan = $p->resolve('products', (string) $row['packageid'], 'service_hosting_hp');
-        $serverData = $this->store->one('SELECT active,username,password,accesshash FROM service_hosting_server WHERE id=?', [$server]);
-        if ($serverData['active'] || $serverData['username'] !== null || $serverData['password'] !== null || $serverData['accesshash'] !== null) throw new SafeException('Hosting server is no longer inactive and credential-free. Historical association refused.');
+        // Some historical services have no server (source value '0') and no package-name
+        // slot. Both native hosting columns are nullable; publish NULL rather than invent
+        // a server or plan. Exact source references stay in the private archive and are
+        // repeated in the order's native metadata for traceability.
+        $server = $p->optional('servers', (string) ($row['server'] ?? ''), 'service_hosting_server');
+        $plan = $p->optional('products', (string) ($row['packageid'] ?? ''), 'service_hosting_hp');
+        if ($server !== null) {
+            $serverData = $this->store->one('SELECT active,username,password,accesshash FROM service_hosting_server WHERE id=?', [$server]);
+            if (!$serverData || $serverData['active'] || $serverData['username'] !== null || $serverData['password'] !== null || $serverData['accesshash'] !== null) throw new SafeException('Hosting server is no longer inactive and credential-free. Historical association refused.');
+        }
         $productData = $this->store->one('SELECT type,active,setup FROM product WHERE id=?', [$product]);
         if ($productData['type'] !== 'hosting' || $productData['active'] || $productData['setup'] !== 'manual') throw new SafeException('Hosting product is no longer a disabled manual product.');
         $clientData = $this->store->one('SELECT currency FROM client WHERE id=?', [$client]);
@@ -68,6 +74,7 @@ final class HostingImporter
             'created_at' => $created, 'updated_at' => null, 'expires_at' => $due, 'canceled_at' => $terminated,
             'config' => Store::json([
                 'import' => true, 'server_id' => $server, 'hosting_plan_id' => $plan,
+                'legacy_server' => $row['server'] ?? null, 'legacy_package_id' => $row['packageid'] ?? null,
                 'username' => $row['username'] ?? null, 'legacy_source_id' => $this->source,
                 'legacy_service_id' => $key, 'legacy_status' => $legacyStatus,
                 'legacy_next_due_date' => $row['nextduedate'] ?? null,

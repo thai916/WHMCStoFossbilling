@@ -12,15 +12,24 @@ use Box\Mod\Whmcstofossbilling\Security\SafeException;
 /** Atomic publication of a bounded historical invoice; never calls approval/payment APIs. */
 final class InvoiceImporter
 {
-    private readonly Persistence $p;
+    public const MISSING_CURRENCY_CLIENT = 'client_currency';
 
-    public function __construct(private readonly Store $store, private readonly int $source, private readonly string $prefix, private readonly ?string $timezone)
+    private readonly Persistence $p;
+    private ?string $currencyInference = null;
+
+    public function __construct(private readonly Store $store, private readonly int $source, private readonly string $prefix, private readonly ?string $timezone, private readonly ?string $missingCurrencyPolicy = null)
     {
         $this->p = new Persistence($store, $source, $prefix);
     }
 
+    public function currencyInference(): ?string
+    {
+        return $this->currencyInference;
+    }
+
     public function import(array $row, string $checksum, string $run): string
     {
+        $this->currencyInference = null;
         $key = (string) $row['id'];
         $status = match (strtolower((string) ($row['status'] ?? ''))) {
             'paid' => 'paid', 'cancelled', 'canceled' => 'canceled', 'refunded' => 'refunded',
@@ -41,10 +50,23 @@ final class InvoiceImporter
             return 'skipped';
         }
         $client = $this->p->resolve('clients', (string) ($row['userid'] ?? ''), 'client');
-        // Do not silently substitute today's client currency for an unknown historical invoice currency.
-        if (empty($row['currency'])) throw new SafeException('Historical invoice currency is not explicit in the source. A reviewed currency-resolution policy is required.');
-        $currencyId = $this->p->resolve('currencies', (string) $row['currency'], 'currency');
-        $currency = $this->store->one('SELECT code FROM currency WHERE id=?', [$currencyId])['code'];
+        $sourceCurrency = (string) ($row['currency'] ?? '');
+        if ($sourceCurrency === '' || $sourceCurrency === '0') {
+            // Never substitute silently. This path is reachable only from a run whose
+            // frozen plan carries the explicit linked-client policy.
+            if ($this->missingCurrencyPolicy !== self::MISSING_CURRENCY_CLIENT) {
+                throw new SafeException('Historical invoice currency is not explicit in the source. A reviewed currency-resolution policy is required.');
+            }
+            $clientCurrency = $this->store->one('SELECT currency FROM client WHERE id=?', [$client])['currency'] ?? null;
+            if (!is_string($clientCurrency) || !preg_match('/\A[A-Z]{3}\z/D', $clientCurrency)) {
+                throw new SafeException('The linked client has no safely resolvable native currency. The historical invoice remains archived.');
+            }
+            $this->currencyInference = 'Source invoice currency was NULL/empty; linked WHMCS client currency ' . $clientCurrency . ' used under the explicit client-currency policy. Original value remains in the private archive; no totals or rates were recalculated.';
+            $currency = $clientCurrency;
+        } else {
+            $currencyId = $this->p->resolve('currencies', $sourceCurrency, 'currency');
+            $currency = $this->store->one('SELECT code FROM currency WHERE id=?', [$currencyId])['code'];
+        }
         $subtotal = $taxable = '0.00';
         $lines = [];
         foreach ($items as $item) {
@@ -86,7 +108,8 @@ final class InvoiceImporter
             'approved' => $approved, 'gateway_id' => null, 'taxname' => $tax === '0.00' ? null : 'Legacy tax',
             'taxrate' => $rate,
             // Original notes may have unknown visibility and remain in the private archive.
-            'notes' => 'Historical WHMCS record. Original number: ' . Sanitizer::text($number !== '' ? $number : $key) . '. Original seller/buyer legal billing snapshots may be unavailable; this is not a reissued legal invoice.',
+            'notes' => 'Historical WHMCS record. Original number: ' . Sanitizer::text($number !== '' ? $number : $key) . '. Original seller/buyer legal billing snapshots may be unavailable; this is not a reissued legal invoice.'
+                . ($this->currencyInference !== null ? ' Invoice currency was inferred from the linked client; the source value was NULL.' : ''),
             'created_at' => $created, 'updated_at' => $created, 'due_at' => $due, 'paid_at' => $paid,
         ]);
         foreach ($lines as [$item, $line, $amount, $taxed]) {

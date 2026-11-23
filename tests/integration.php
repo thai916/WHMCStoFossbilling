@@ -221,10 +221,14 @@ try {
     $service->confirmSourceTimezone($profile['source_id'], 'UTC');
     rejects(fn () => $service->createRun($runInput + ['mode' => 'archive'], 1), 'Destination writes require backup and explicit confirmation');
     rejects(fn () => $service->createRun($runInput + ['mode' => 'archive', 'invalid_date_fallback' => 'epoch', 'confirmation' => 'PRESERVE HISTORY', 'backup_verified' => true, 'backup_reference' => 'disposable fixture', 'accept_limitations' => true], 1), 'Only the explicit 1900 invalid-date policy is accepted');
+    rejects(fn () => $service->createRun($runInput + ['mode' => 'archive', 'missing_invoice_currency' => 'guess', 'confirmation' => 'PRESERVE HISTORY', 'backup_verified' => true, 'backup_reference' => 'disposable fixture', 'accept_limitations' => true], 1), 'An unreviewed missing-invoice-currency policy is rejected');
     $dry = $service->createRun($runInput + ['mode' => 'dry_run'], 1);
     $dryPlan = json_decode($service->store()->run($dry['id'])['plan_json'], true, 128, JSON_THROW_ON_ERROR);
     expect($dryPlan['source_security_mode'] === 'standard' && $dryPlan['source_timezone'] === 'UTC' && $dryPlan['source_timezone_evidence']['confidence'] === 'administrator_verified', 'Run plans freeze source security mode and verified timezone evidence');
     expect($dryPlan['invalid_date_fallback'] === null, 'Historical dates stay strict unless the 1900 fallback is explicitly selected');
+    expect($dryPlan['missing_invoice_currency'] === null, 'Missing invoice currencies stay blocked unless the linked-client policy is explicitly selected');
+    $currencyPreview = $service->createRun($runInput + ['mode' => 'dry_run', 'missing_invoice_currency' => 'client_currency'], 1);
+    expect(json_decode($service->store()->run($currencyPreview['id'])['plan_json'], true, 128, JSON_THROW_ON_ERROR)['missing_invoice_currency'] === \Box\Mod\Whmcstofossbilling\Destination\NativeWriter::MISSING_CURRENCY_CLIENT, 'Opt-in preview freezes the linked-client currency policy in its plan');
     $fallbackPreview = $service->createRun($runInput + ['mode' => 'dry_run', 'invalid_date_fallback' => '1900'], 1);
     expect(json_decode($service->store()->run($fallbackPreview['id'])['plan_json'], true, 128, JSON_THROW_ON_ERROR)['invalid_date_fallback'] === \Box\Mod\Whmcstofossbilling\Destination\NativeWriter::DATE_FALLBACK, 'Opt-in preview freezes the explicit 1900 policy in its plan');
     $service->confirmSourceTimezone($profile['source_id'], 'Asia/Kolkata');
@@ -277,8 +281,8 @@ try {
     $existing = $service->existingRun($authorized);
     expect($existing['run']['id'] === $run['id'] && $existing['run']['status'] === 'paused' && $existing['differences'] === [], 'Unfinished-run lookup returns the paused run with matching saved choices');
     $savedPlan = $service->store()->run($run['id'])['plan_json'];
-    $different = $service->existingRun(array_replace($authorized, ['mode' => 'archive', 'tables' => ['tblclients'], 'invalid_date_fallback' => '1900']));
-    expect(in_array('execution mode', $different['differences'], true) && in_array('selected tables', $different['differences'], true) && in_array('invalid-date policy', $different['differences'], true), 'Existing-run lookup reports mode/table/date-policy differences without changing the plan');
+    $different = $service->existingRun(array_replace($authorized, ['mode' => 'archive', 'tables' => ['tblclients'], 'invalid_date_fallback' => '1900', 'missing_invoice_currency' => 'client_currency']));
+    expect(in_array('execution mode', $different['differences'], true) && in_array('selected tables', $different['differences'], true) && in_array('invalid-date policy', $different['differences'], true) && in_array('missing-invoice-currency policy', $different['differences'], true), 'Existing-run lookup reports mode/table/date/currency-policy differences without changing the plan');
     expect($service->store()->run($run['id'])['plan_json'] === $savedPlan && $sourceDigest() === $before, 'Existing-run lookup neither rewrites immutable history plans nor modifies the source');
     $service->control($run['id'], 'cancel');
     expect($service->existingRun($authorized) === null, 'Cancelled runs do not block or get offered as unfinished history work');
@@ -300,6 +304,7 @@ try {
     } while ($result['status'] === 'running');
     $status = $service->status($run['id']);
     expect($status['date_fallbacks'] === [], 'Runs without invalid dates report no substitutions');
+    expect($status['currency_inferences'] === [] && $status['currency_inference_total'] === 0, 'Runs without a missing-currency policy report no currency inferences');
     if ($status['errors']) {
         echo json_encode($status['errors'], JSON_PRETTY_PRINT), PHP_EOL;
     }
@@ -381,7 +386,7 @@ try {
     expect(count(json_decode($export, true, 128, JSON_THROW_ON_ERROR)['records']) > 0, 'JSON report contains actual per-record dispositions');
     $legacy = $service->archive(['source_id' => $profile['source_id'], 'legacy_kind' => 'invoice', 'legacy_reference' => 'LEGACY-001']);
     expect(count($legacy['records']) === 1 && $legacy['records'][0]['source_key'] === '1', 'Original textual invoice number is searchable even when native numbering cannot represent it');
-    $financial = $service->createRun(array_replace($authorized, ['mode' => 'historical_native']), 1);
+    $financial = $service->createRun(array_replace($authorized, ['mode' => 'historical_native', 'missing_invoice_currency' => 'client_currency']), 1);
     $service->control($financial['id'], 'resume');
     do {
         $result = $service->batch($financial['id'], bin2hex(random_bytes(16)), 50);
@@ -393,6 +398,8 @@ try {
     expect($exceptionExport['summary']['scope'] === 'failed_records_only', 'Exception export declares that successful records are omitted');
     expect(count($exceptionExport['records']) > 0, 'Exception export contains every failed record from the run');
     expect(array_reduce($exceptionExport['records'], static fn (bool $allFailed, array $record): bool => $allFailed && $record['status'] === 'failed', true), 'Exception export contains no successful records');
+    expect($exceptionExport['summary']['missing_invoice_currency_policy'] === \Box\Mod\Whmcstofossbilling\Destination\NativeWriter::MISSING_CURRENCY_CLIENT, 'Exception export discloses the authorized missing-currency policy');
+    expect($exceptionExport['summary']['currency_inferences'] === [] && $exceptionExport['summary']['currency_inference_total'] === 0, 'Exception export lists no inferred currencies when the source always states one');
     $invoice = $store->one('SELECT * FROM invoice');
     expect((int) $store->one('SELECT COUNT(*) AS n FROM invoice')['n'] === 1 && $invoice['nr'] === '003' && $invoice['currency'] === 'EUR', 'Only safely representable invoice publishes natively with its numeric legacy number and currency');
     expect($invoice['created_at'] === '2011-01-01 00:00:00' && $invoice['paid_at'] === '2011-01-05 12:00:00', 'Native invoice preserves original creation and payment dates');
@@ -447,6 +454,45 @@ try {
     expect($order['status'] === 'canceled' && $order['period'] === '1M' && $order['exact_price'] === '7.50' && $order['created_at'] === '2008-01-01 00:00:00' && $order['expires_at'] === '2009-01-01 00:00:00', 'Historical hosting order preserves original billing cycle, dates and service-specific price');
     expect(json_decode($order['config'], true)['legacy_status'] === 'Terminated' && $hosting['pass'] === null, 'Original hosting status is traceable and no account password is imported');
     expect((int) $order['group_master'] === 1, 'Imported hosting orders are group masters so core client/admin order lists show them');
+    // Nullable hosting references and opt-in currency inference are exercised directly
+    // inside a rolled-back transaction so the aggregate fixture assertions stay fixed.
+    $store->pdo->beginTransaction();
+    try {
+        $productIdentity = $store->one("SELECT * FROM whmcstofossbilling_identity WHERE source_id=? AND table_name='tblproducts' AND source_key='1' AND destination_entity='product'", [$profile['source_id']]);
+        $store->execute('INSERT INTO whmcstofossbilling_identity (source_id,table_name,source_key,destination_entity,destination_id,checksum,destination_checksum,run_id,created_at) VALUES (?,?,?,?,?,?,?,?,UTC_TIMESTAMP())', [$profile['source_id'], 'tblproducts', '99', 'product', $productIdentity['destination_id'], $productIdentity['checksum'], $productIdentity['destination_checksum'], $financial['id']]);
+        $noPlanHosting = ['id' => 997, 'userid' => '1', 'packageid' => '99', 'server' => '0', 'domain' => 'noplan.example.invalid', 'username' => 'legacyuser', 'regdate' => '2007-01-01', 'nextduedate' => '2008-01-01', 'amount' => '5.00', 'domainstatus' => 'Cancelled', 'billingcycle' => 'Monthly', 'dedicatedip' => null, 'firstpaymentamount' => '5.00', 'termination_date' => '2008-02-01'];
+        $hostingImport = (new \Box\Mod\Whmcstofossbilling\Destination\HostingImporter($store, $profile['source_id'], 'tbl', 'UTC'))->import($noPlanHosting, hash('sha256', Store::json($noPlanHosting)), $financial['id']);
+        expect($hostingImport === 'imported', 'Historical hosting without a package-name plan or assigned server publishes natively');
+        $serviceRow = $store->one('SELECT * FROM service_hosting WHERE sld=?', ['noplan']);
+        expect($serviceRow['service_hosting_hp_id'] === null && $serviceRow['service_hosting_server_id'] === null, 'Missing plan and server stay NULL instead of inventing reference records');
+        $orderConfig = json_decode($store->one('SELECT config FROM client_order WHERE service_id=?', [$serviceRow['id']])['config'], true);
+        expect($orderConfig['legacy_package_id'] === '99' && $orderConfig['legacy_server'] === '0' && $orderConfig['hosting_plan_id'] === null, 'Original missing references remain traceable in native order metadata');
+
+        $line = ['id' => '997', 'invoiceid' => '996', 'userid' => '1', 'type' => 'Hosting', 'relid' => '1', 'description' => 'Inferred currency line', 'amount' => '30.00', 'taxed' => '1'];
+        $lineChecksum = hash('sha256', Store::json($line));
+        $store->execute('INSERT INTO whmcstofossbilling_snapshot (run_id,source_id,table_name,source_key,payload,checksum) VALUES (?,?,?,?,?,?)', [$financial['id'], $profile['source_id'], 'tblinvoiceitems', '997', Store::json($line), $lineChecksum]);
+        $snapshotId = (int) $store->pdo->lastInsertId();
+        $store->execute('INSERT INTO whmcstofossbilling_snapshot_link (snapshot_id,run_id,table_name,field_name,target_key) VALUES (?,?,?,?,?)', [$snapshotId, $financial['id'], 'tblinvoiceitems', 'invoiceid', '996']);
+        $nullCurrencyInvoice = ['id' => '996', 'userid' => '1', 'invoicenum' => 'CFG-996', 'date' => '2012-01-01', 'duedate' => '2012-01-15', 'datepaid' => '2012-01-05 12:00:00', 'subtotal' => '30.00', 'tax' => '3.00', 'tax2' => '0', 'credit' => '0', 'total' => '33.00', 'status' => 'Paid', 'currency' => null, 'taxrate' => '10'];
+        $invoiceChecksum = hash('sha256', Store::json($nullCurrencyInvoice));
+        rejects(fn () => (new \Box\Mod\Whmcstofossbilling\Destination\NativeWriter($store, $profile['source_id'], 'tbl', 'UTC'))->import('invoices', $nullCurrencyInvoice, [], $invoiceChecksum, $financial['id']), 'A NULL invoice currency still fails without the explicit opt-in');
+        $currencyWriter = new \Box\Mod\Whmcstofossbilling\Destination\NativeWriter($store, $profile['source_id'], 'tbl', 'UTC', null, \Box\Mod\Whmcstofossbilling\Destination\NativeWriter::MISSING_CURRENCY_CLIENT);
+        expect($currencyWriter->import('invoices', $nullCurrencyInvoice, [], $invoiceChecksum, $financial['id']) === 'currency_inference', 'Opt-in writer reports an inferred invoice currency instead of a silent substitution');
+        expect(str_contains((string) $currencyWriter->currencyInference(), 'USD'), 'Inference disclosure names the linked client currency');
+        $inferred = $store->one("SELECT * FROM invoice WHERE nr='996'");
+        expect($inferred['currency'] === 'USD' && str_contains($inferred['notes'], 'inferred'), 'Inferred invoice publishes with the linked client currency and an explicit native warning');
+        $store->execute("INSERT INTO whmcstofossbilling_attempt (run_id,table_name,source_key,status,error_type,message,retryable,attempts,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())", [$financial['id'], 'tblinvoices', '996', 'currency_inference', 'currency_inference', $currencyWriter->currencyInference(), 0, 1]);
+        ob_start();
+        (new \Box\Mod\Whmcstofossbilling\Report\Exporter($service))->response($financial['id'], 'json')->sendContent();
+        $fullReport = json_decode(ob_get_clean(), true, 128, JSON_THROW_ON_ERROR);
+        expect($fullReport['summary']['currency_inference_total'] === 1 && count($fullReport['summary']['currency_inferences']) === 1 && $fullReport['summary']['currency_inferences'][0]['source_key'] === '996', 'Full report contains every inferred currency, not only the UI preview');
+        ob_start();
+        (new \Box\Mod\Whmcstofossbilling\Report\Exporter($service))->response($financial['id'], 'json', true)->sendContent();
+        $exceptionReport = json_decode(ob_get_clean(), true, 128, JSON_THROW_ON_ERROR);
+        expect($exceptionReport['summary']['currency_inferences'] === [] && $exceptionReport['summary']['currency_inference_total'] === 1, 'Exception-only report omits successful inference rows but keeps their total');
+    } finally {
+        $store->pdo->rollBack();
+    }
     $ormConfig = \Doctrine\ORM\ORMSetup::createAttributeMetadataConfig([dirname(__DIR__, 2) . '/Order/Entity'], cache: new \Symfony\Component\Cache\Adapter\ArrayAdapter());
     $ormConfig->setNamingStrategy(new \Doctrine\ORM\Mapping\UnderscoreNamingStrategy(CASE_LOWER));
     if (PHP_VERSION_ID >= 80400) $ormConfig->enableNativeLazyObjects(true);

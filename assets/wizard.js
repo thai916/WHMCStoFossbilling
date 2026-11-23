@@ -735,7 +735,10 @@
             scrollToTop();
         }
     }
-    $("dry-run").addEventListener("click", handle(async () => createRun("dry_run", { invalid_date_fallback: $("invalid-date-fallback").checked ? "1900" : "" })));
+    $("dry-run").addEventListener("click", handle(async () => createRun("dry_run", {
+        invalid_date_fallback: $("invalid-date-fallback").checked ? "1900" : "",
+        missing_invoice_currency: $("missing-invoice-currency").checked ? "client_currency" : ""
+    })));
     $("authorize").addEventListener("submit", handle(async () => {
         const overwrite = overwriteIntent();
         if (overwrite && !confirmOverwrite()) return;
@@ -825,6 +828,13 @@
         $("date-fallbacks").replaceChildren(fallbacks.length
             ? dataTable(["Table", "WHMCS ID", "Original value", "Applied native date"], fallbacks.map(row => [row.table_name, row.source_key, row.original_value, "1900-01-01 00:00:00"]))
             : element("p", "None. No invalid date was substituted in this run."));
+        const inferences = run.currency_inferences || [];
+        const inferenceTotal = Number(run.currency_inference_total ?? inferences.length);
+        const inferenceNodes = inferences.length
+            ? [dataTable(["Table", "WHMCS ID", "Disclosure"], inferences.map(row => [row.table_name, row.source_key, row.disclosure]))]
+            : [element("p", "None. No missing invoice currency was inferred in this run.")];
+        if (inferenceTotal > inferences.length) inferenceNodes.push(element("p", `Showing the first ${inferences.length} of ${inferenceTotal} inferred invoices. Download the full JSON or CSV report for every inference.`));
+        $("currency-inferences").replaceChildren(...inferenceNodes);
         $("errors").replaceChildren(dataTable(["Table", "WHMCS ID", "Error", "Attempts"], run.errors.map(row => [row.table_name, row.source_key, row.message, row.attempts])));
         const financial = [];
         Object.entries(run.reconciliation.totals_by_currency || {}).forEach(([metric, totals]) => totals.forEach(total => financial.push([metric, total.currency, total.source_total, total.native_total ?? "Not represented", total.source_records, total.native_records])));

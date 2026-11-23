@@ -185,6 +185,7 @@ function dashboardFixture() {
                     if (data.mode === "dry_run") {
                         assert.equal(data.target_mode, "historical_native", "Preview keeps the explicitly selected target mode");
                         assert.equal(data.invalid_date_fallback, "1900", "Explicit invalid-date policy is submitted with the run plan");
+                        assert.equal(data.missing_invoice_currency, "client_currency", "Explicit linked-client currency policy is submitted with the run plan");
                     } else {
                         assert.equal(data.mode, "archive", "Authorized run uses a synthetic API only; no live writes");
                         assert.equal(data.confirmation, "PRESERVE HISTORY");
@@ -416,6 +417,7 @@ function dashboardFixture() {
         analyzedTables.delete("tblcurrencies");
         await page.locator("#wm-mode").selectOption("historical_native");
         await page.locator("#wm-invalid-date-fallback").check();
+        await page.locator("#wm-missing-invoice-currency").check();
         await page.locator("#wm-dry-run").click();
         assert.equal(requests.includes("run_drive"), false, "Preview creation cannot start processing before explicit Resume");
         await page.locator("#wm-top-progress").waitFor({ state: "visible" });
@@ -437,6 +439,7 @@ function dashboardFixture() {
         assert.equal(await page.locator("#wm-top-progress [role=progressbar]").getAttribute("aria-valuenow"), "100");
         assert.match(await page.locator("#wm-progress-label").innerText(), /preview_finished · 1\/1 records scanned/);
         assert.match(await page.locator("#wm-date-fallbacks").innerText(), /No invalid date was substituted/);
+        assert.match(await page.locator("#wm-currency-inferences").innerText(), /No missing invoice currency was inferred/);
         assert.equal(await page.locator("#wm-archive-total").innerText(), "Not saved", "Preview counts never claim history was saved");
         await page.locator('[data-step="analysis"]').click();
         await page.locator("#wm-mode").selectOption("archive");

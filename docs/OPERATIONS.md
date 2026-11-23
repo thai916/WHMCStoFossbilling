@@ -35,6 +35,8 @@ There is deliberately no “complete migration” state in version 0.2.
 
 The separate historical mode requires explicit confirmation of a private, otherwise idle destination. It can publish canceled/terminated/fraud hosting history, eligible paid/canceled/refunded invoices, processed payments/refunds and complete reconciled credit aggregates. It does **not** enable native active services, domain orders, unpaid/draft invoices or incompatible tax/currency/allocation cases.
 
+A historical service without a package-name plan or assigned server is published with the corresponding native hosting reference set to `NULL`; both destination columns are nullable. The importer never invents a plan or server. The original source references remain in the private archive and native order metadata.
+
 Source hosting statuses are retained verbatim in archive/order metadata; the reviewed native historical state is `canceled`. Do not use native Uncancel/Activate as a migration shortcut: those are operational administrator actions.
 
 Imported products remain disabled/manual and servers inactive/credential-free. Only explicit package names and unambiguous groups are mapped. Entering credentials or enabling products is not part of the import.
@@ -82,6 +84,8 @@ The retry button processes up to five failures per request and allows at most fi
 
 Invalid client registration dates (`0000-00-00` or impossible calendar values) fail closed by default and remain in the archive. With the explicit **1900-01-01** checkbox selected when the run is created, those clients import natively with `created_at = 1900-01-01 00:00:00`; the original value stays in `whmcstofossbilling_archive.original_dates` and is shown under **Date substitutions** and in the JSON/CSV report. Daylight-saving gaps, ambiguous timestamps and unverified application timezones are still hard failures. Do not edit source records to satisfy the importer. Because run plans are immutable, an existing run cannot be switched to this policy; create a new reviewed run.
 
+Historical invoices whose source currency is NULL/empty also fail closed by default. A newly authorized run may explicitly tick **linked client currency** (`missing_invoice_currency = client_currency`) to use the currency of the linked client from that same WHMCS import. This is an inference, not a source-stated invoice currency: the original NULL remains in the archive, the native invoice note warns about the inference, **Inferred invoice currencies** shows the total and the first 100 records, the full JSON/CSV report contains every inference, and no amount, tax or exchange rate is recalculated. Exception-only downloads stay failed-record-only. The policy is frozen into the new run plan; an existing run cannot be switched to it. Other unknown/ambiguous currencies remain blocked. If the linked client has no safely resolvable native currency, the invoice still fails.
+
 Credit-publication failures are separately visible and share the bounded retry workflow. After a successful retry, the run pauses; Resume refreshes financial assessment. An old native run predating the new capability revision must be cancelled and recreated with a reviewed plan.
 
 Changed native source records require manual review. Existing destination values are not overwritten. A source data change can add an archive revision while the corresponding native update remains blocked.
@@ -108,6 +112,6 @@ Attachment fields do not establish file transfer. Private files require a separa
 
 **Do not perform a production billing cutover with 0.2.** Supported historical native records and extracted-baseline assessments exist, but active service/domain/unpaid-invoice isolation, complete debt/allocation/FX reconstruction and authenticated real-admin verification remain incomplete.
 
-Assessment results are timestamped comparisons of frozen extracted facts against native records. Reports do not claim that the live WHMCS system remained unchanged during extraction. Missing native records, unsupported fees, currency conflicts and inferred currency bases remain exceptions. Reassess after later destination changes.
+Assessment results are timestamped comparisons of frozen extracted facts against native records. Reports do not claim that the live WHMCS system remained unchanged during extraction. Missing native records, unsupported fees, currency conflicts and opted-in inferred currency bases remain exceptions. Reassess after later destination changes.
 
 A complete implementation still needs a stable source snapshot or controlled final cutover and separate approval of hosting, registrar, payment, customer-access and notification activation.
