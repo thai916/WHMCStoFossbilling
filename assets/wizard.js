@@ -60,6 +60,18 @@
         $("preparation").setAttribute("aria-busy", "false");
         $("preparation-bar").classList.remove("wm-working", "wm-indeterminate");
     }
+    function repairStatus(text, danger = false) {
+        const node = $("repair-status");
+        node.className = `small mt-2 ${danger ? "text-danger" : "text-success"}`;
+        node.textContent = text;
+    }
+    function repairProgress(active) {
+        $("repair-progress").classList.toggle("d-none", !active);
+        $("repair-progress").setAttribute("aria-busy", String(active));
+        $("repair-progress-bar").classList.toggle("wm-working", active);
+        $("repair-progress-bar").classList.toggle("wm-indeterminate", active);
+        $("repair-progress-track").setAttribute("aria-valuetext", active ? "Repair in progress; the server reports one final result, so no percentage is shown" : "Idle");
+    }
     function stopWatching() { clearTimeout(observer); observer = null; ++watchVersion; }
     function hideRecovery() { $("recovery-banner").classList.add("d-none"); }
     function showSourceChoice() {
@@ -836,15 +848,38 @@
         notice(`Retried ${result.attempted} records. Each record is limited to five total attempts; unresolved conflicts require manual action.${result.status === "paused" ? " Resume to refresh the financial assessment after successful retries." : ""}`);
     }));
     $("repair-visibility").addEventListener("click", handle(async () => {
-        if (!run || pumping) throw new Error("Select the imported run before repairing visibility.");
+        if (!run || pumping) {
+            repairStatus("Select the imported run before repairing visibility. No records were changed.", true);
+            throw new Error("Select the imported run before repairing visibility.");
+        }
         const phrase = $("repair-confirm").value.trim();
-        if (!$("repair-acknowledged").checked || phrase !== "REPAIR IMPORTED VISIBILITY") throw new Error("Acknowledge the limited field change and type REPAIR IMPORTED VISIBILITY exactly. No records were changed.");
-        if (!window.confirm("Repair visibility flags on module-owned records from this run only? No records will be deleted or re-imported.")) return;
-        const result = await api("run_repair_visibility", { run_id: run.id, confirmation: phrase });
-        $("repair-acknowledged").checked = false; $("repair-confirm").value = "";
-        await refreshRun();
-        notice(`Repaired ${result.orders} imported hosting orders and ${result.invoices} imported invoices. No records were deleted or re-imported.`);
+        if (!$("repair-acknowledged").checked || phrase !== "REPAIR IMPORTED VISIBILITY") {
+            repairStatus("Acknowledge the limited field change and type REPAIR IMPORTED VISIBILITY exactly. No records were changed.", true);
+            throw new Error("Acknowledge the limited field change and type REPAIR IMPORTED VISIBILITY exactly. No records were changed.");
+        }
+        if (!window.confirm("Repair visibility flags on module-owned records from this run only? No records will be deleted or re-imported.")) {
+            repairStatus("Repair cancelled. No records were changed.");
+            return;
+        }
+        const button = $("repair-visibility"), originalLabel = button.textContent;
+        button.textContent = "Repairing…";
+        repairProgress(true);
+        try {
+            const result = await api("run_repair_visibility", { run_id: run.id, confirmation: phrase });
+            $("repair-acknowledged").checked = false; $("repair-confirm").value = "";
+            await refreshRun();
+            const message = `Repaired ${result.orders} imported hosting orders and ${result.invoices} imported invoices. No records were deleted or re-imported.`;
+            repairStatus(message);
+            notice(message);
+        } catch (error) {
+            repairStatus(error.message, true);
+            throw error;
+        } finally {
+            repairProgress(false);
+            button.textContent = originalLabel;
+        }
     }));
+    ["repair-confirm", "repair-acknowledged"].forEach(id => $(id).addEventListener("input", () => $("repair-status").classList.add("d-none")));
     async function resumeCurrentRun() {
         if (!run || pumping) throw new Error("Select a paused/running run. This tab must not already be processing.");
         stopWatching();

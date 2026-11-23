@@ -170,6 +170,11 @@
                 <label class="form-check"><input id="wm-repair-acknowledged" class="form-check-input" type="checkbox" value="1"><span class="form-check-label">I understand this writes only those two visibility fields to module-owned destination records.</span></label>
                 <label class="form-label mt-2" for="wm-repair-confirm">Type REPAIR IMPORTED VISIBILITY</label>
                 <div class="d-flex flex-wrap gap-2 align-items-start"><input id="wm-repair-confirm" class="form-control wm-search" autocomplete="off" maxlength="28"><button id="wm-repair-visibility" class="btn btn-outline-warning" type="button">Repair visibility</button></div>
+                <div id="wm-repair-progress" class="mt-3 d-none" aria-busy="false">
+                    <div class="d-flex justify-content-between gap-2"><span id="wm-repair-progress-label" role="status" aria-live="polite">Repairing imported visibility…</span></div>
+                    <div id="wm-repair-progress-track" class="progress mt-2" role="progressbar" aria-label="Visibility repair progress"><div id="wm-repair-progress-bar" class="progress-bar wm-working" style="width:100%"></div></div>
+                </div>
+                <p id="wm-repair-status" class="small mt-2 d-none" role="status" aria-live="polite"></p>
             </div>
             <div class="wm-preservation-summary" aria-label="Preservation outcomes"><div><span>Native imported</span><strong id="wm-native-total">0</strong><small>Available through supported FOSSBilling features</small></div><div><span>Archive only</span><strong id="wm-archive-total">0</strong><small>Preserved as private legacy evidence</small></div><div><span>Needs attention</span><strong id="wm-failed-total">0</strong><small>Review exceptions; preservation may be incomplete</small></div></div>
             <div id="wm-counts"></div><h4 class="mt-3">Date substitutions (first 100)</h4><div id="wm-date-fallbacks"></div>

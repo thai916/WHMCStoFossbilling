@@ -41,7 +41,7 @@ const source = {
 let currentRun = null;
 let recoveryRun = null;
 let failNextCreation = false, failNextAnalysis = false;
-let connectionGate = null, preparationGate = null, analysisFailure = null, connectionFailure = null;
+let connectionGate = null, preparationGate = null, analysisFailure = null, connectionFailure = null, repairGate = null;
 let syntheticExisting = null, raceExisting = null;
 const analysisGates = [];
 const analyzedTables = new Set();
@@ -220,6 +220,7 @@ function dashboardFixture() {
                 case "run_repair_visibility":
                     assert.deepEqual(Object.keys(data).sort(), ["confirmation", "run_id"], "Repair sends only the selected run and exact phrase, never credentials or payloads");
                     assert.equal(data.confirmation, "REPAIR IMPORTED VISIBILITY");
+                    if (repairGate) { const pending = repairGate; repairGate = null; await pending; }
                     repairRequests.push(data);
                     result = { orders: 2, invoices: 3, changed: 5, run_id: data.run_id, source_id: 0 }; break;
                 case "run_batch":
@@ -647,12 +648,12 @@ function dashboardFixture() {
         }
         const repairsBefore = repairRequests.length;
         await page.locator("#wm-repair-visibility").click();
-        await page.getByText("Acknowledge the limited field change", { exact: false }).waitFor();
+        await page.waitForFunction(() => document.getElementById("wm-repair-status").textContent.includes("Acknowledge the limited field change"));
         assert.equal(repairRequests.length, repairsBefore, "An unacknowledged repair sends no API request");
         await page.locator("#wm-repair-acknowledged").check();
         await page.locator("#wm-repair-confirm").fill("WRONG PHRASE");
         await page.locator("#wm-repair-visibility").click();
-        await page.waitForFunction(() => document.getElementById("wm-notice").textContent.includes("REPAIR IMPORTED VISIBILITY exactly"));
+        await page.waitForFunction(() => document.getElementById("wm-repair-status").textContent.includes("REPAIR IMPORTED VISIBILITY exactly"));
         assert.equal(repairRequests.length, repairsBefore, "An incorrect repair phrase sends no API request");
         let repairDialog = "";
         page.once("dialog", async dialog => { repairDialog = dialog.message(); await dialog.dismiss(); });
@@ -660,9 +661,20 @@ function dashboardFixture() {
         await page.locator("#wm-repair-visibility").click();
         assert.match(repairDialog, /module-owned records from this run only/, "Repair requires a final scoped browser confirmation");
         assert.equal(repairRequests.length, repairsBefore, "A declined repair sends no API request");
+        assert.match(await page.locator("#wm-repair-status").innerText(), /Repair cancelled\. No records were changed/, "A cancelled confirmation is reported beside the button");
+        let releaseRepair;
+        repairGate = new Promise(resolve => { releaseRepair = resolve; });
         page.once("dialog", dialog => dialog.accept());
         await page.locator("#wm-repair-visibility").click();
-        await page.getByText("Repaired 2 imported hosting orders", { exact: false }).waitFor();
+        await page.locator("#wm-repair-progress").waitFor({ state: "visible" });
+        assert.equal(await page.locator("#wm-repair-progress").getAttribute("aria-busy"), "true", "Repair progress is announced to assistive technology");
+        assert.match(await page.locator("#wm-repair-progress-bar").getAttribute("class"), /wm-working/, "Repair bar animates while the server works");
+        assert.match(await page.locator("#wm-repair-progress-label").innerText(), /Repairing imported visibility/, "Repair progress explains what is happening");
+        assert.equal(await page.locator("#wm-repair-visibility").innerText(), "Repairing…", "The button reports the in-flight repair");
+        releaseRepair();
+        await page.waitForFunction(() => document.getElementById("wm-repair-status").textContent.includes("Repaired 2 imported hosting orders"));
+        assert.equal(await page.locator("#wm-repair-progress").isVisible(), false, "Repair progress closes when the server finishes");
+        assert.equal(await page.locator("#wm-repair-progress").getAttribute("aria-busy"), "false", "Finished repair is no longer announced as busy");
         assert.equal(repairRequests.length, repairsBefore + 1, "One confirmed repair sends one scoped request");
         assert.deepEqual(repairRequests.at(-1), { run_id: historicalRunId, confirmation: "REPAIR IMPORTED VISIBILITY" }, "Repair payload contains only the run and exact phrase");
         assert.equal(await page.locator("#wm-repair-confirm").inputValue(), "", "Repair phrase is cleared after a successful repair");
